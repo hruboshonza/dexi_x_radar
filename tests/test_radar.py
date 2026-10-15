@@ -233,6 +233,14 @@ class ToolsTest(unittest.TestCase):
         self.assertEqual(view["owner_instructions"], ["kratší"])
 
 
+class LoggingTest(unittest.TestCase):
+    def test_http_client_logs_never_carry_request_urls(self):
+        import logging
+        from dexi_x_radar.app import quiet_http_logs
+        quiet_http_logs()
+        self.assertFalse(logging.getLogger("httpx").isEnabledFor(logging.INFO))
+
+
 class AuthTest(unittest.TestCase):
     def test_mcp_needs_the_token_and_health_does_not(self):
         tools = RadarTools(load_settings({"DB_PATH": ":memory:"}), Store(":memory:"), None, dexi=None)

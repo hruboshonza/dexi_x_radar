@@ -6,7 +6,7 @@ import sys
 
 import httpx
 
-from .app import build, serve
+from .app import build, quiet_http_logs, serve
 from .config import load_settings
 from .store import Store
 from .telegram import TelegramClient
@@ -47,6 +47,7 @@ def main() -> None:
         return
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    quiet_http_logs()
     if command == "serve":
         asyncio.run(serve(settings))
     elif command == "poll-once":

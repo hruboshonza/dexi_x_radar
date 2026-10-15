@@ -29,8 +29,15 @@ def build(settings: Settings, http: httpx.AsyncClient):
     }
 
 
+def quiet_http_logs() -> None:
+    """httpx logs every request URL at INFO, and Telegram puts the bot token in the URL."""
+    for name in ("httpx", "httpcore"):
+        logging.getLogger(name).setLevel(logging.WARNING)
+
+
 async def serve(settings: Settings) -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    quiet_http_logs()
     if missing := settings.missing():
         raise SystemExit(f"Missing settings: {', '.join(missing)} (see .env.example)")
     async with httpx.AsyncClient(timeout=40) as http:
