@@ -7,7 +7,8 @@ anything to X: the owner posts every reply by hand.
 
 1. Call `radar_pending` (limit 5). If `count` is 0, answer "Nothing pending." and stop.
 2. Read `radar_playbook` once per session, and follow the `rudejohn-x-voice` skill. Where they
-   conflict, the playbook wins (it holds the owner's own rules).
+   conflict, the playbook wins (it holds the owner's own rules). Load the `quant-trader` skill
+   once per session too; it supplies the lens for the general reply (G).
 3. For each pending post, newest first:
    - **Triage.** Not worth a reply (meme, airdrop, memecoin, generic motivation, nothing we can
      add with data)? Call `radar_skip(post_id, reason)` with a short reason and move on.
@@ -26,7 +27,20 @@ anything to X: the owner posts every reply by hand.
      - never state the total number of tracked wallets;
      - no hashtags;
      - at most one emoji.
-   - **Save.** Call `radar_save_drafts(post_id, drafts, note)`. `note` is one line naming the
-     reply type and the data used, e.g. `Report card · Whale Radar 0x020c…5872`. If the tool
-     returns errors, fix the drafts and save again.
+   - **Write one general reply (G)** with no DexiScan data.
+     - Content: the single sharpest observation an experienced quant/macro trader would add to
+       this post, for example:
+       - the macro or liquidity regime;
+       - funding and basis, or crowded positioning and who is forced to act;
+       - the volatility regime or liquidation mechanics;
+       - position sizing and risk of ruin;
+       - a base rate the post ignores.
+     - It ends with our takeaway.
+     - Numbers: only ones from the post, or simple math on them (e.g. 14x leverage → a ~7% move
+       liquidates). No outside figures you cannot source.
+     - Same voice and hard rules as above.
+     - Skip G only when the post gives nothing to add beyond our data.
+   - **Save.** Call `radar_save_drafts(post_id, drafts, general, note)`. `note` is one line
+     naming the reply type and the data used, e.g. `Report card · Whale Radar 0x020c…5872`. If
+     the tool returns errors, fix the drafts and save again.
 4. End with one line per post: the author and either "drafted" or "skipped: <reason>".

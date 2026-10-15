@@ -271,8 +271,24 @@ class ToolsTest(unittest.TestCase):
     def test_saves_and_warns_on_missing_punctuation(self):
         r = self.save(["Funding cost him $1.59M.", "Size tells you conviction"])
         self.assertTrue(r["ok"])
-        self.assertEqual(r["warnings"], ["B: last sentence has no closing punctuation"])
+        self.assertIn("B: last sentence has no closing punctuation", r["warnings"])
         self.assertEqual(self.store.post("1")["status"], "drafted")
+
+    def test_general_reply_is_saved_as_g_and_validated(self):
+        bad = asyncio.run(self.tools.save_drafts("1", ["Funding cost him $1.59M."], "n", general="Macro — risk."))
+        self.assertFalse(bad["ok"])
+        self.assertIn("G: contains an em or en dash", bad["errors"])
+        ok = asyncio.run(self.tools.save_drafts("1", ["Funding cost him $1.59M."], "n",
+                                                general="At 14x, a 7% move ends it. Size is the real risk here."))
+        self.assertTrue(ok["ok"])
+        self.assertEqual([d["label"] for d in self.store.latest_drafts("1")], ["A", "G"])
+        text, kb = render(self.store.post("1"), self.store.latest_drafts("1"))
+        self.assertIn("🌐 G", text)
+        self.assertEqual([b["text"] for b in kb["inline_keyboard"][0]], ["↩ A", "↩ G"])
+
+    def test_missing_general_reply_is_a_warning(self):
+        r = self.save(["Funding cost him $1.59M."])
+        self.assertIn("no general reply (G)", " ".join(r["warnings"]))
 
     def test_pending_carries_owner_instructions(self):
         self.store.add_feedback("1", "edit", "kratší")

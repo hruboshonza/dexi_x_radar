@@ -44,6 +44,15 @@ skill; rules here override it where they conflict.
   Owner's own example (Hayes reply, 2026-10-15): "Considering the data, I think we still
   have time." The takeaway must follow from the numbers above it and must not be a call
   to buy or sell.
+- **Always add one general reply (G)**, built without DexiScan data. It is a sharp macro or
+  quant observation, through the `quant-trader` lens:
+  - regime and liquidity;
+  - funding/basis and crowding;
+  - volatility and liquidations;
+  - sizing and risk of ruin;
+  - base rates.
+  It ends with a takeaway. Use only numbers from the post or simple math on them. It shows
+  in Telegram as 🌐 G, and feedback tracks how often it is chosen. (Owner, 2026-10-15.)
 - Numbers come only from the post itself (text or screenshot) or from DexiScan data.
   Derived numbers (break-even distance, price per unit, size ratio) are fine when the
   math is shown in the drafts log.

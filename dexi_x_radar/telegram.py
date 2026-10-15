@@ -84,7 +84,8 @@ def render(post: dict, drafts: list[dict], reply: dict | None = None) -> tuple[s
     status = post["status"]
     if drafts and status in ("drafted", "sent"):
         for d in drafts:
-            lines.append(f"<b>{d['label']}</b>  {e(d['text'])}")
+            label = "🌐 G" if d["label"] == "G" else d["label"]
+            lines.append(f"<b>{label}</b>  {e(d['text'])}")
         if post.get("note"):
             lines.append(f"<i>{e(post['note'])}</i>")
     if status == "pending":

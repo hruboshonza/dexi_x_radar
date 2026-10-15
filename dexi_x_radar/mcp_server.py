@@ -25,8 +25,9 @@ _END_PUNCT = tuple(".!?)")
 INSTRUCTIONS = """Reply radar for the @DexiScan X account. Posts arrive in a queue; you write reply
 drafts, the owner posts them by hand. Workflow: radar_pending -> for each post either radar_skip
 (off-topic) or fetch data (dexiscan_xbrief, dexiscan_whale_radar for full wallet addresses) and
-radar_save_drafts. Follow radar_playbook and the rudejohn-x-voice skill. Use only numbers from the
-post or from the DexiScan tools. Never state the total number of tracked wallets."""
+radar_save_drafts (data drafts A-C plus one general macro/quant reply G). Follow radar_playbook,
+the rudejohn-x-voice skill, and the quant-trader skill for G. Use only numbers from the post or
+from the DexiScan tools. Never state the total number of tracked wallets."""
 
 
 class RadarTools:
@@ -58,15 +59,16 @@ class RadarTools:
             out.append(view)
         return {"pending": out, "count": len(out)}
 
-    async def save_drafts(self, post_id: str, drafts: list[str], note: str = "") -> dict:
+    async def save_drafts(self, post_id: str, drafts: list[str], note: str = "", general: str = "") -> dict:
         post = self.store.post(post_id)
         if not post:
             return {"ok": False, "error": f"unknown post {post_id}"}
         texts = [d.strip() for d in drafts if d and d.strip()]
+        general = (general or "").strip()
         if not 1 <= len(texts) <= 3:
             return {"ok": False, "error": "send 1 to 3 drafts, the full reply first"}
         errors, warnings = [], []
-        for label, text in zip("ABC", texts):
+        for label, text in list(zip("ABC", texts)) + ([("G", general)] if general else []):
             if any(ch in text for ch in _DASHES):
                 errors.append(f"{label}: contains an em or en dash")
             if len(text) > MAX_DRAFT:
@@ -75,9 +77,11 @@ class RadarTools:
                 errors.append(f"{label}: states the total number of tracked wallets")
             if not text.rstrip().endswith(_END_PUNCT):
                 warnings.append(f"{label}: last sentence has no closing punctuation")
+        if not general:
+            warnings.append("no general reply (G): add one unless the post gives nothing to say beyond our data")
         if errors:
             return {"ok": False, "errors": errors}
-        rnd = self.store.save_drafts(post_id, texts)
+        rnd = self.store.save_drafts(post_id, texts, general or None)
         self.store.set_status(post_id, "drafted", note=note or None, skip_by=None, skip_reason=None)
         if self.notifier:
             await self.notifier.show(post_id, ping=True)
@@ -155,11 +159,14 @@ def build_mcp(tools: RadarTools, path: str = "/mcp") -> FastMCP:
         return tools.pending(limit)
 
     @mcp.tool()
-    async def radar_save_drafts(post_id: str, drafts: list[str], note: str = "") -> dict:
-        """Save 1-3 drafts (full reply first) and push them to the owner's phone.
+    async def radar_save_drafts(post_id: str, drafts: list[str], general: str = "", note: str = "") -> dict:
+        """Save the drafts and push them to the owner's phone as one message under the post.
+        `drafts`: 1-3 data replies (A, B, C), the full reply first, built on the post and DexiScan data.
+        `general`: one general reply (G) with no DexiScan data: a sharp macro or quant observation
+        (regime, funding/basis, crowding, volatility, liquidity, risk and sizing, base rates) plus a takeaway.
         `note`: reply type and the data used, e.g. "Report card · Whale Radar 0x020c…".
         Rejected: em/en dashes, over 280 chars, stating the total number of tracked wallets."""
-        return await tools.save_drafts(post_id, drafts, note)
+        return await tools.save_drafts(post_id, drafts, note, general)
 
     @mcp.tool()
     async def radar_skip(post_id: str, reason: str) -> dict:
