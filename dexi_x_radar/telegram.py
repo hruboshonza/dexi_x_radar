@@ -139,7 +139,7 @@ class Notifier:
 
     async def show(self, post_id: str, ping: bool = False) -> None:
         post = self.store.post(post_id)
-        if not post:
+        if not post or not self.chat_id:
             return
         drafts = self.store.latest_drafts(post_id)
         replies = self.store.replies(post_id=post_id)
@@ -196,6 +196,13 @@ class BotLoop:
         return str(chat.get("id")) == self.chat_id
 
     async def handle(self, update: dict) -> None:
+        if not self.chat_id:
+            # Setup mode: tell whoever sends /start their chat id, act on nothing else.
+            msg = update.get("message") or {}
+            if (msg.get("text") or "").startswith("/start") and msg.get("chat"):
+                await self.tg.call("sendMessage", chat_id=msg["chat"]["id"],
+                                   text=f"TELEGRAM_CHAT_ID={msg['chat']['id']}\nNastav ji a restartuj radar.")
+            return
         if cb := update.get("callback_query"):
             if not self._allowed(cb.get("message", {}).get("chat", {})):
                 return

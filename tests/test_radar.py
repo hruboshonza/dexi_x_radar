@@ -161,6 +161,51 @@ class PollerTest(unittest.TestCase):
             self.assertEqual(second["new"], 0)
 
 
+class RecordingNotifier:
+    def __init__(self):
+        self.shown = []
+
+    async def show(self, post_id, ping=False):
+        self.shown.append(post_id)
+
+
+class FakeTg:
+    def __init__(self):
+        self.calls = []
+
+    async def call(self, method, **payload):
+        self.calls.append((method, payload))
+        return {}
+
+
+class DeliveryTest(unittest.TestCase):
+    def test_unshown_posts_are_sent_and_stale_ones_stay_quiet(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            wl = Path(tmp) / "watchlist.txt"
+            wl.write_text("lookonchain\n", encoding="utf-8")
+            settings = load_settings({"WATCHLIST_FILE": str(wl), "DB_PATH": ":memory:"})
+            store = Store(":memory:")
+            store.insert_post(make_post("old", minutes_ago=7 * 60))
+            notifier = RecordingNotifier()
+
+            class QuietOwner(FakeX):
+                async def own_posts(self, *args):
+                    return [], {}
+            asyncio.run(Poller(settings, store, QuietOwner(), notifier).cycle())
+            self.assertIn("500", notifier.shown, "the new watch post reaches the phone")
+            self.assertNotIn("old", notifier.shown, "a never-shown post that went stale sends nothing")
+            self.assertEqual(store.post("old")["status"], "ignored")
+
+    def test_setup_mode_answers_start_with_the_chat_id(self):
+        from dexi_x_radar.telegram import BotLoop
+        tg = FakeTg()
+        bot = BotLoop(Store(":memory:"), tg, notifier=None, chat_id="")
+        asyncio.run(bot.handle({"message": {"text": "/start", "chat": {"id": 4242}}}))
+        asyncio.run(bot.handle({"callback_query": {"id": "1", "data": "s:1", "message": {"chat": {"id": 4242}}}}))
+        self.assertEqual(len(tg.calls), 1)
+        self.assertIn("TELEGRAM_CHAT_ID=4242", tg.calls[0][1]["text"])
+
+
 class ToolsTest(unittest.TestCase):
     def setUp(self):
         self.store = Store(":memory:")

@@ -41,10 +41,10 @@ class Settings:
     outcome_after_hours: float = 24.0
 
     def missing(self) -> list[str]:
+        # TELEGRAM_CHAT_ID may be missing on the first start: the bot then answers /start with it.
         required = {
             "X_BEARER_TOKEN": self.x_bearer_token,
             "TELEGRAM_BOT_TOKEN": self.telegram_bot_token,
-            "TELEGRAM_CHAT_ID": self.telegram_chat_id,
             "MCP_TOKEN": self.mcp_token,
         }
         return [name for name, value in required.items() if not value]

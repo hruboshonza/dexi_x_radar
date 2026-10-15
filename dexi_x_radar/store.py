@@ -175,6 +175,12 @@ class Store:
             params.append(value)
         self._x(f"UPDATE posts SET {', '.join(sets)} WHERE id = ?", (*params, post_id))
 
+    def unshown_open_posts(self) -> list[str]:
+        """Open posts that never reached Telegram (no chat id yet, or a failed send)."""
+        rows = self._q("SELECT id FROM posts WHERE tg_message_id IS NULL AND status IN ('pending', 'drafted') "
+                       "ORDER BY created_at")
+        return [r["id"] for r in rows]
+
     def set_message_id(self, post_id: str, message_id: int) -> None:
         self._x("UPDATE posts SET tg_message_id = ? WHERE id = ?", (message_id, post_id))
 

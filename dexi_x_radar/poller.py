@@ -57,10 +57,12 @@ class Poller:
         ignored = self._ignore_stale()
         await self._outcomes()
 
-        for post_id in new_ids:
+        for post_id in self.store.unshown_open_posts():
             await self._show(post_id)
         for post_id in sent + ignored:
-            await self._show(post_id)
+            # Only update a message that exists: a post that never reached the phone stays quiet.
+            if (self.store.post(post_id) or {}).get("tg_message_id"):
+                await self._show(post_id)
 
         summary = {"new": len(new_ids), "sent": len(sent), "ignored": len(ignored),
                    "cost_usd": round(self.x.cost() - before, 4)}
