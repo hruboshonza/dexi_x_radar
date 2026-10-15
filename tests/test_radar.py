@@ -311,6 +311,29 @@ class LoggingTest(unittest.TestCase):
         self.assertFalse(logging.getLogger("httpx").isEnabledFor(logging.INFO))
 
 
+class BridgeTest(unittest.TestCase):
+    def test_rpc_sends_no_protocol_header_and_unwraps_results(self):
+        from dexi_x_radar.bridge import RemoteError, rpc
+        seen = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(request)
+            body = __import__("json").loads(request.content)
+            if body["params"].get("name") == "boom":
+                return httpx.Response(200, json={"jsonrpc": "2.0", "id": body["id"], "error": {"message": "nope"}})
+            return httpx.Response(200, json={"jsonrpc": "2.0", "id": body["id"], "result": {"ok": body["method"]}})
+
+        async def run():
+            async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+                ok = await rpc(http, "https://radar/x", "tok", "tools/call", {"name": "radar_skip", "arguments": {}})
+                with self.assertRaises(RemoteError):
+                    await rpc(http, "https://radar/x", "tok", "tools/call", {"name": "boom", "arguments": {}})
+                return ok
+        self.assertEqual(asyncio.run(run()), {"ok": "tools/call"})
+        self.assertNotIn("mcp-protocol-version", seen[0].headers)
+        self.assertEqual(seen[0].headers["authorization"], "Bearer tok")
+
+
 class AuthTest(unittest.TestCase):
     def test_mcp_needs_the_token_and_health_does_not(self):
         tools = RadarTools(load_settings({"DB_PATH": ":memory:"}), Store(":memory:"), None, dexi=None)

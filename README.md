@@ -206,8 +206,11 @@ Then start the loop from *A* above in a Claude Code session in this folder.
 They act on requests whose path ends in `/mcp` or that carry the `mcp-protocol-version`
 header, over HTTP and, for some programs, over HTTPS too.
 
-Seen on a Windows PC running Norton. There, Python's HTTPS client got through, while curl
-and Claude Code did not. Fixes:
+Seen on a Windows PC running Norton. There, curl and Claude Code got broken responses even
+over HTTPS. With the protocol header, even Python's client had the responses to write tools
+(`radar_skip`, `radar_save_drafts`) held back, while read tools passed. The server had
+already answered and saved. The bridge therefore speaks plain JSON-RPC to the radar without
+that header (the server is stateless and does not need it). Fixes:
 - connect Claude Code through the **stdio bridge** (above), and
 - serve MCP under another path (`MCP_PATH=/radar`) for local plain-HTTP use, or
 - add an exception in the antivirus.

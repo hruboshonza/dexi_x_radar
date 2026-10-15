@@ -188,8 +188,8 @@ def build_mcp(tools: RadarTools, path: str = "/mcp") -> FastMCP:
         return tools.queue(status, limit)
 
     @mcp.tool()
-    def radar_post(post_id: str) -> dict:
-        """One post with every draft round, the owner's reply and all feedback."""
+    def radar_get_post(post_id: str) -> dict:
+        """Read one queued post with every draft round, the owner's reply and all feedback (read-only)."""
         return tools.post_detail(post_id)
 
     @mcp.tool()
