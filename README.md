@@ -6,8 +6,9 @@ every reply yourself** from the X app. The radar never posts, likes or follows.
 
 Built for [@DexiScan](https://x.com/DexiScan). Reply rules: [`PLAYBOOK.md`](PLAYBOOK.md).
 
-> **Status:** phase 1 in progress. `radar_poll.py` works today (polling + DexiScan data).
-> The service (storage, Telegram bot, MCP server) described below is being built.
+> **Status:** phase 1. The service (`python -m dexi_x_radar serve`) and its MCP tools work.
+> Drafts come from Claude Code on the owner's PC. `radar_poll.py` is the older one-shot
+> script, kept for manual runs.
 
 ## How it works
 
@@ -43,10 +44,11 @@ Both use the same MCP server; the difference is who calls it and when.
 
 ### A. Local Claude with a subscription (default, phase 1)
 
-Claude Code on your own machine, logged in with your Claude subscription, runs a loop:
+Claude Code on your own machine, logged in with your Claude subscription, runs the
+`/radar-draft` command from this repo (`.claude/commands/radar-draft.md`) in a loop:
 
 ```
-/loop 10m  take pending posts from dexi-x-radar, draft replies per PLAYBOOK.md, save them
+/loop 10m /radar-draft
 ```
 
 - No Anthropic API key and no per-token cost. It uses your subscription, which is meant
@@ -144,6 +146,8 @@ cp .env.example .env     # then fill it in
 | `X_OWN_HANDLE` | yes | your account, without @ |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | yes | the bot and your chat with it |
 | `MCP_TOKEN` | yes | shared secret for the MCP server |
+| `MCP_PATH` | no (`/mcp`) | URL path of the MCP server (see *Troubleshooting*) |
+| `LOOKBACK_HOURS` | no (2) | how far back the very first poll reads |
 | `POLL_INTERVAL_SECONDS` | no (300) | how often to read X |
 | `MAX_POSTS_PER_POLL` | no (40) | cost guard per source per poll |
 | `WATCHLIST_FILE` | no (`watchlist.txt`) | accounts to watch |
@@ -158,8 +162,14 @@ cp .env.example .env     # then fill it in
 
 ```bash
 pip install -r requirements.txt
-python -m dexi_x_radar serve
+python -m dexi_x_radar chat-id     # once, after /start to the bot (service stopped)
+python -m dexi_x_radar poll-once   # one poll cycle, prints what it did and cost
+python -m dexi_x_radar serve       # the service: poller + bot + MCP
+python -m dexi_x_radar status      # queue counts
 ```
+
+Run **one instance at a time**. Telegram lets only one process read the bot's updates, and
+each instance keeps its own cursors, so two instances would also read and pay twice.
 
 **On Railway:** the poller and bot run even when your PC is off.
 
@@ -175,6 +185,16 @@ claude mcp add --transport http dexi-x-radar https://<your-host>/mcp \
 ```
 
 Then start the loop from *A* above in a Claude Code session in this folder.
+
+## Troubleshooting
+
+**MCP calls fail with "peer unexpectedly closed connection" while `/health` works.** Some
+antivirus web filters inspect plain-HTTP MCP traffic. They act on requests whose path ends
+in `/mcp` or that carry the `mcp-protocol-version` header, and cut the response off. Seen on
+a Windows PC running Norton, over `localhost`. Fixes:
+- serve MCP under another path (`MCP_PATH=/radar`), or
+- use the Railway deployment over HTTPS, or
+- add an exception for the service in the antivirus.
 
 ## Cost
 

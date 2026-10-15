@@ -1,0 +1,230 @@
+"""MCP server: how Claude reads the queue, fetches DexiScan data and saves drafts.
+
+There is deliberately no tool that posts to X.
+"""
+import hmac
+import re
+from datetime import datetime, timedelta, timezone
+
+from mcp.server.fastmcp import FastMCP
+from starlette.requests import Request
+from starlette.responses import JSONResponse, PlainTextResponse
+
+from .config import Settings
+from .dexiscan import DexiScan
+from .store import Store, now_iso, parse_iso
+from .telegram import Notifier
+
+MAX_DRAFT = 280
+_DASHES = ("—", "–")
+# "77 Hyperliquid whales we track", "214 wallets we track": the owner never states the cohort size.
+_COHORT_SIZE = re.compile(r"\b\d{2,4}\s+(?:tracked\s+)?(?:hyperliquid\s+)?(?:whales|wallets)\s+(?:that\s+)?we\s+track",
+                          re.IGNORECASE)
+_END_PUNCT = tuple(".!?)")
+
+INSTRUCTIONS = """Reply radar for the @DexiScan X account. Posts arrive in a queue; you write reply
+drafts, the owner posts them by hand. Workflow: radar_pending -> for each post either radar_skip
+(off-topic) or fetch data (dexiscan_xbrief, dexiscan_whale_radar for full wallet addresses) and
+radar_save_drafts. Follow radar_playbook and the rudejohn-x-voice skill. Use only numbers from the
+post or from the DexiScan tools. Never state the total number of tracked wallets."""
+
+
+class RadarTools:
+    def __init__(self, settings: Settings, store: Store, notifier: Notifier | None, dexi: DexiScan):
+        self.s = settings
+        self.store = store
+        self.notifier = notifier
+        self.dexi = dexi
+
+    def _post_view(self, post: dict) -> dict:
+        age = int((datetime.now(timezone.utc) - parse_iso(post["created_at"])).total_seconds() // 60)
+        return {
+            "id": post["id"], "url": post["url"], "source": post["source"], "status": post["status"],
+            "author": post["author"], "author_followers": post.get("author_followers"),
+            "age_min": age, "created_at": post["created_at"], "text": post["text"],
+            "media": post["media"], "urls": post["urls"], "addresses": post["addresses"],
+            "metrics": post["metrics"], "note": post.get("note"),
+        }
+
+    def pending(self, limit: int = 5) -> dict:
+        posts = self.store.posts(status="pending", limit=limit)
+        out = []
+        for p in posts:
+            view = self._post_view(p)
+            feedback = self.store.feedback(post_id=p["id"])
+            view["owner_instructions"] = [f["value"] for f in feedback if f["kind"] == "edit"]
+            view["regenerate"] = any(f["kind"] == "regen" for f in feedback)
+            view["previous_drafts"] = self.store.all_drafts(p["id"])
+            out.append(view)
+        return {"pending": out, "count": len(out)}
+
+    async def save_drafts(self, post_id: str, drafts: list[str], note: str = "") -> dict:
+        post = self.store.post(post_id)
+        if not post:
+            return {"ok": False, "error": f"unknown post {post_id}"}
+        texts = [d.strip() for d in drafts if d and d.strip()]
+        if not 1 <= len(texts) <= 3:
+            return {"ok": False, "error": "send 1 to 3 drafts, the full reply first"}
+        errors, warnings = [], []
+        for label, text in zip("ABC", texts):
+            if any(ch in text for ch in _DASHES):
+                errors.append(f"{label}: contains an em or en dash")
+            if len(text) > MAX_DRAFT:
+                errors.append(f"{label}: {len(text)} chars, max {MAX_DRAFT}")
+            if _COHORT_SIZE.search(text):
+                errors.append(f"{label}: states the total number of tracked wallets")
+            if not text.rstrip().endswith(_END_PUNCT):
+                warnings.append(f"{label}: last sentence has no closing punctuation")
+        if errors:
+            return {"ok": False, "errors": errors}
+        rnd = self.store.save_drafts(post_id, texts)
+        self.store.set_status(post_id, "drafted", note=note or None, skip_by=None, skip_reason=None)
+        if self.notifier:
+            await self.notifier.show(post_id, ping=True)
+        return {"ok": True, "round": rnd, "warnings": warnings}
+
+    async def skip(self, post_id: str, reason: str) -> dict:
+        if not self.store.post(post_id):
+            return {"ok": False, "error": f"unknown post {post_id}"}
+        self.store.set_status(post_id, "skipped", skip_by="claude", skip_reason=reason)
+        if self.notifier:
+            await self.notifier.show(post_id)
+        return {"ok": True}
+
+    def queue(self, status: str | None = None, limit: int = 20) -> dict:
+        return {"posts": [self._post_view(p) for p in self.store.posts(status=status, limit=limit)],
+                "counts": self.store.status_counts()}
+
+    def post_detail(self, post_id: str) -> dict:
+        post = self.store.post(post_id)
+        if not post:
+            return {"error": f"unknown post {post_id}"}
+        return {**self._post_view(post), "drafts": self.store.all_drafts(post_id),
+                "replies": self.store.replies(post_id=post_id), "feedback": self.store.feedback(post_id=post_id),
+                "skip": {"by": post.get("skip_by"), "reason": post.get("skip_reason")}}
+
+    def feedback_summary(self, days: int = 7) -> dict:
+        since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        replies = [r for r in self.store.replies(since=since) if r["matched"] != "unqueued"]
+        feedback = self.store.feedback(since=since)
+        matched: dict[str, int] = {}
+        sent = []
+        for r in replies:
+            key = "merged" if r["matched"].startswith("merged") else r["matched"].rstrip("~") + (
+                " edited" if r["matched"].endswith("~") else "")
+            matched[key] = matched.get(key, 0) + 1
+            post = self.store.post(r["post_id"]) or {}
+            sent.append({"to": post.get("author"), "posted": r["text"], "matched": r["matched"],
+                         "similarity": r["similarity"], "diff": r["diff"], "metrics": r["metrics"],
+                         "author_replied": r["author_replied"]})
+        skips: dict[str, int] = {}
+        for f in feedback:
+            if f["kind"] == "skip":
+                skips[f["value"]] = skips.get(f["value"], 0) + 1
+        per_author: dict[str, dict] = {}
+        for p in self.store.posts(limit=1000):
+            if p["fetched_at"] < since:
+                continue
+            a = per_author.setdefault(p["author"], {"posts": 0, "sent": 0, "skipped": 0, "ignored": 0})
+            a["posts"] += 1
+            if p["status"] in ("sent", "skipped", "ignored"):
+                a[p["status"]] += 1
+        return {
+            "since": since,
+            "queue": self.store.status_counts(since),
+            "drafts_used": matched,
+            "sent": sent,
+            "owner_skip_reasons": skips,
+            "edit_instructions": [f["value"] for f in feedback if f["kind"] == "edit"],
+            "regenerate_requests": sum(1 for f in feedback if f["kind"] == "regen"),
+            "per_author": per_author,
+        }
+
+    def playbook(self) -> str:
+        return self.s.playbook_file.read_text(encoding="utf-8")
+
+
+def build_mcp(tools: RadarTools, path: str = "/mcp") -> FastMCP:
+    # host 0.0.0.0 keeps FastMCP's localhost-only Host check off; the bearer token guards the path.
+    mcp = FastMCP("dexi-x-radar", instructions=INSTRUCTIONS, host="0.0.0.0", stateless_http=True,
+                  json_response=True, streamable_http_path=path)
+
+    @mcp.tool()
+    def radar_pending(limit: int = 5) -> dict:
+        """Posts waiting for drafts, newest first, with owner instructions and earlier drafts."""
+        return tools.pending(limit)
+
+    @mcp.tool()
+    async def radar_save_drafts(post_id: str, drafts: list[str], note: str = "") -> dict:
+        """Save 1-3 drafts (full reply first) and push them to the owner's phone.
+        `note`: reply type and the data used, e.g. "Report card · Whale Radar 0x020c…".
+        Rejected: em/en dashes, over 280 chars, stating the total number of tracked wallets."""
+        return await tools.save_drafts(post_id, drafts, note)
+
+    @mcp.tool()
+    async def radar_skip(post_id: str, reason: str) -> dict:
+        """Skip a post that is not worth a reply (memes, airdrops, off-topic). The owner can override."""
+        return await tools.skip(post_id, reason)
+
+    @mcp.tool()
+    def radar_queue(status: str | None = None, limit: int = 20) -> dict:
+        """The queue, optionally by status: pending | drafted | sent | skipped | ignored."""
+        return tools.queue(status, limit)
+
+    @mcp.tool()
+    def radar_post(post_id: str) -> dict:
+        """One post with every draft round, the owner's reply and all feedback."""
+        return tools.post_detail(post_id)
+
+    @mcp.tool()
+    def radar_feedback(days: int = 7) -> dict:
+        """What the owner posted vs the drafts, skip reasons, edit instructions, outcomes, per account."""
+        return tools.feedback_summary(days)
+
+    @mcp.tool()
+    def radar_playbook() -> str:
+        """The reply rules (PLAYBOOK.md). Read before drafting."""
+        return tools.playbook()
+
+    @mcp.tool()
+    async def dexiscan_xbrief(market: str = "crypto") -> dict:
+        """Current whale positioning from DexiScan (bias, accumulation, crowd, leverage…). market: crypto | xyz."""
+        return await tools.dexi.xbrief(market)
+
+    @mcp.tool()
+    async def dexiscan_whale_radar(address: str) -> dict:
+        """Whale Radar for one full wallet address: PnL, win rate with n, avg win/loss, open positions."""
+        return await tools.dexi.whale_radar(address)
+
+    @mcp.custom_route("/health", methods=["GET"])
+    async def health(_: Request) -> PlainTextResponse:
+        return PlainTextResponse(f"ok {now_iso()}")
+
+    return mcp
+
+
+class BearerAuth:
+    """Pure ASGI guard: every request under `prefix` needs `Authorization: Bearer <token>`."""
+
+    def __init__(self, app, token: str, prefix: str = "/mcp"):
+        self.app = app
+        self.expected = f"Bearer {token}".encode()
+        self.enabled = bool(token)
+        self.prefix = prefix
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and scope["path"].startswith(self.prefix):
+            got = dict(scope.get("headers") or []).get(b"authorization", b"")
+            if not (self.enabled and hmac.compare_digest(got, self.expected)):
+                # Read the request body first: answering with it unread makes uvicorn drop the connection.
+                more = True
+                while more:
+                    message = await receive()
+                    more = message.get("type") == "http.request" and message.get("more_body", False)
+                await JSONResponse({"error": "unauthorized"}, status_code=401)(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
+
+
+def build_app(tools: RadarTools, token: str, path: str = "/mcp"):
+    return BearerAuth(build_mcp(tools, path).streamable_http_app(), token, prefix=path)

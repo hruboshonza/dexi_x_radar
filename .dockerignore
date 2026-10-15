@@ -1,0 +1,11 @@
+.env
+.env.*
+.venv/
+data/
+inbox/
+state.json
+drafts/
+tests/
+__pycache__/
+*.pyc
+.git/
