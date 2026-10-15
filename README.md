@@ -29,11 +29,11 @@ X API ──────►│ poller (every 5 min)  → SQLite: cursor, queue, 
 1. **Poll.** Every `POLL_INTERVAL_SECONDS` (default 300 s) the service reads the X API:
    new original posts from `watchlist.txt`, mentions of `X_OWN_HANDLE`, and your own new
    replies. It uses `since_id`, so each post is read (and paid for) once.
-2. **Queue.** New posts go into the queue. The bot sends each one to your phone right
-   away, marked *draft pending*.
+2. **Queue.** New posts go into the queue. Nothing is sent to your phone yet.
 3. **Draft.** Claude takes pending posts over MCP, adds data (for DexiScan: x-brief and
-   Whale Radar), writes 2-3 drafts per `PLAYBOOK.md` and saves them back. The bot then
-   edits the same Telegram message to show the drafts.
+   Whale Radar), writes 2-3 drafts per `PLAYBOOK.md` and saves them back. Only then
+   does the bot send one message, which pings: the author's post, with the drafts right
+   under it. A post Claude skips (meme, off-topic) never reaches your phone.
 4. **You post.** **↩** opens X with the reply prefilled. **Copy** copies it.
    **Edit** takes your instruction and redrafts. **Skip** asks for a reason.
 5. **Learn.** The radar sees what you actually posted and how it did (see *Feedback*).
@@ -55,8 +55,9 @@ Claude Code on your own machine, logged in with your Claude subscription, runs t
   for your own interactive use. That is why this mode runs on your PC rather than on a
   server.
 - Drafts are written by the strongest model you have in Claude Code.
-- Drafts only appear while that session is running. Posts still reach your phone when it
-  is off, marked *draft pending*. A `/loop` expires after 7 days; start it again.
+- Drafts only appear while that session is running. While it is off, nothing reaches
+  your phone. Posts keep queueing, and those still unanswered after 6 h are dropped. A
+  `/loop` expires after 7 days; start it again.
 
 ### B. MCP server from any Claude client (on demand)
 

@@ -82,11 +82,11 @@ def render(post: dict, drafts: list[dict], reply: dict | None = None) -> tuple[s
     lines.append(f"<blockquote>{e(text)}</blockquote>")
 
     status = post["status"]
-    if post.get("note"):
-        lines.append(f"<i>{e(post['note'])}</i>")
     if drafts and status in ("drafted", "sent"):
         for d in drafts:
             lines.append(f"<b>{d['label']}</b>  {e(d['text'])}")
+        if post.get("note"):
+            lines.append(f"<i>{e(post['note'])}</i>")
     if status == "pending":
         lines.append("⏳ <i>návrh čeká na Claude</i>")
     elif status == "skipped":
@@ -128,8 +128,9 @@ def skip_keyboard(post_id: str) -> dict:
 class Notifier:
     """Keeps the one Telegram message per post in sync with the store.
 
-    A new post arrives silently. Only finished drafts ping the phone: Telegram never
-    notifies on an edit, so `ping=True` replaces the message with a fresh one.
+    Nothing reaches the phone until Claude has drafted: the first message is the post with
+    its drafts under it, and it pings. Telegram never notifies on an edit, so `ping=True`
+    replaces the message with a fresh one (after the owner asked for a redraft).
     """
 
     def __init__(self, store: Store, tg: TelegramClient, chat_id: str):
@@ -137,9 +138,22 @@ class Notifier:
         self.tg = tg
         self.chat_id = chat_id
 
+    async def drop(self, post_id: str) -> None:
+        """Remove the post's message, if it has one (a skipped or stale post leaves no trace)."""
+        post = self.store.post(post_id)
+        if not post or not post.get("tg_message_id") or not self.chat_id:
+            return
+        try:
+            await self.tg.call("deleteMessage", chat_id=self.chat_id, message_id=post["tg_message_id"])
+        except Exception:
+            log.warning("could not delete message %s", post["tg_message_id"])
+        self.store.set_message_id(post_id, None)
+
     async def show(self, post_id: str, ping: bool = False) -> None:
         post = self.store.post(post_id)
         if not post or not self.chat_id:
+            return
+        if not post.get("tg_message_id") and post["status"] != "drafted":
             return
         drafts = self.store.latest_drafts(post_id)
         replies = self.store.replies(post_id=post_id)

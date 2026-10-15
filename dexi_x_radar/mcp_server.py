@@ -88,7 +88,7 @@ class RadarTools:
             return {"ok": False, "error": f"unknown post {post_id}"}
         self.store.set_status(post_id, "skipped", skip_by="claude", skip_reason=reason)
         if self.notifier:
-            await self.notifier.show(post_id)
+            await self.notifier.drop(post_id)
         return {"ok": True}
 
     def queue(self, status: str | None = None, limit: int = 20) -> dict:

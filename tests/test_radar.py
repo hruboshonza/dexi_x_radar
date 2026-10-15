@@ -164,9 +164,13 @@ class PollerTest(unittest.TestCase):
 class RecordingNotifier:
     def __init__(self):
         self.shown = []
+        self.dropped = []
 
     async def show(self, post_id, ping=False):
         self.shown.append(post_id)
+
+    async def drop(self, post_id):
+        self.dropped.append(post_id)
 
 
 class FakeTg:
@@ -179,22 +183,65 @@ class FakeTg:
 
 
 class DeliveryTest(unittest.TestCase):
-    def test_unshown_posts_are_sent_and_stale_ones_stay_quiet(self):
+    def notifier(self, store):
+        from dexi_x_radar.telegram import Notifier
+        tg = FakeTg()
+
+        async def call(method, **payload):
+            tg.calls.append((method, payload))
+            return {"message_id": 77} if method == "sendMessage" else {}
+        tg.call = call
+        return Notifier(store, tg, chat_id="1"), tg
+
+    def test_nothing_reaches_the_phone_before_drafts(self):
+        store = Store(":memory:")
+        store.insert_post(make_post("1"))
+        notifier, tg = self.notifier(store)
+        asyncio.run(notifier.show("1"))
+        self.assertEqual(tg.calls, [])
+
+    def test_drafts_arrive_as_one_message_that_pings(self):
+        store = Store(":memory:")
+        store.insert_post(make_post("1"))
+        store.save_drafts("1", ["Funding cost him $1.59M."])
+        store.set_status("1", "drafted")
+        notifier, tg = self.notifier(store)
+        asyncio.run(notifier.show("1", ping=True))
+        method, payload = tg.calls[-1]
+        self.assertEqual(method, "sendMessage")
+        self.assertFalse(payload["disable_notification"])
+        self.assertLess(payload["text"].index("Someone opened"), payload["text"].index("Funding cost him"),
+                        "the author's post comes first, the drafts right under it")
+        self.assertEqual(store.post("1")["tg_message_id"], 77)
+
+    def test_a_skipped_post_leaves_no_message(self):
+        store = Store(":memory:")
+        store.insert_post(make_post("1"))
+        store.set_message_id("1", 55)
+        notifier, tg = self.notifier(store)
+        tools = RadarTools(load_settings({"DB_PATH": ":memory:"}), store, notifier, dexi=None)
+        asyncio.run(tools.skip("1", "meme"))
+        self.assertEqual(tg.calls[-1][0], "deleteMessage")
+        self.assertIsNone(store.post("1")["tg_message_id"])
+
+    def test_stale_and_leftover_pending_messages_are_removed(self):
         with tempfile.TemporaryDirectory() as tmp:
             wl = Path(tmp) / "watchlist.txt"
             wl.write_text("lookonchain\n", encoding="utf-8")
             settings = load_settings({"WATCHLIST_FILE": str(wl), "DB_PATH": ":memory:"})
             store = Store(":memory:")
             store.insert_post(make_post("old", minutes_ago=7 * 60))
+            store.insert_post(make_post("leftover", minutes_ago=30))
+            store.set_message_id("leftover", 9)
             notifier = RecordingNotifier()
 
             class QuietOwner(FakeX):
                 async def own_posts(self, *args):
                     return [], {}
             asyncio.run(Poller(settings, store, QuietOwner(), notifier).cycle())
-            self.assertIn("500", notifier.shown, "the new watch post reaches the phone")
-            self.assertNotIn("old", notifier.shown, "a never-shown post that went stale sends nothing")
             self.assertEqual(store.post("old")["status"], "ignored")
+            self.assertIn("old", notifier.dropped)
+            self.assertIn("leftover", notifier.dropped)
 
     def test_setup_mode_answers_start_with_the_chat_id(self):
         from dexi_x_radar.telegram import BotLoop

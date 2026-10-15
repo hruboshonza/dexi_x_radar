@@ -57,12 +57,22 @@ class Poller:
         ignored = self._ignore_stale()
         await self._outcomes()
 
+        # Drafted posts whose message failed to send get another try.
         for post_id in self.store.unshown_open_posts():
             await self._show(post_id)
-        for post_id in sent + ignored:
-            # Only update a message that exists: a post that never reached the phone stays quiet.
-            if (self.store.post(post_id) or {}).get("tg_message_id"):
+        # A message for a post without drafts is a leftover of the old "draft pending" notice.
+        if self.notifier:
+            for post in self.store.posts(status="pending", limit=500):
+                if post.get("tg_message_id") and not self.store.latest_drafts(post["id"]):
+                    await self.notifier.drop(post["id"])
+        for post_id in sent:
+            await self._show(post_id)
+        for post_id in ignored:
+            # A stale post with drafts keeps its message, marked; one without drafts leaves no trace.
+            if self.store.latest_drafts(post_id):
                 await self._show(post_id)
+            elif self.notifier:
+                await self.notifier.drop(post_id)
 
         summary = {"new": len(new_ids), "sent": len(sent), "ignored": len(ignored),
                    "cost_usd": round(self.x.cost() - before, 4)}
