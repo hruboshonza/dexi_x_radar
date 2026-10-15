@@ -78,6 +78,14 @@ skill; rules here override it where they conflict.
   Write "the Hyperliquid whales we track". Counts inside a finding are fine ("+$10.1M
   from 7 wallets"). (Owner, 2026-10-15.)
 
+## Voice: "we" first
+
+- **Write primarily in the first person plural**, as the DexiScan team: *we, our, us*
+  ("We see…", "Our data has…", "We'd stay out…").
+- *I* is fine occasionally, for a genuinely personal trade or story, but it is the
+  exception.
+- This overrides the voice skill's "we = product, I = founder" split. (Owner, 2026-10-15.)
+
 ## Language
 
 - **Every sentence ends with punctuation, including the last line.** This overrides the

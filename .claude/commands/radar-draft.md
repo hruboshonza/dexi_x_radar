@@ -20,6 +20,7 @@ anything to X: the owner posts every reply by hand.
      owner wants a different angle than `previous_drafts`.
    - **Write 1-3 drafts.** The first one is the full reply: data, a kicker, and our own takeaway
      at the end. The others are shorter alternatives. Hard rules:
+     - write as **we** (DexiScan: we, our, us); *I* only occasionally, for a personal take;
      - no em or en dashes;
      - at most 280 characters each;
      - every sentence ends with punctuation;

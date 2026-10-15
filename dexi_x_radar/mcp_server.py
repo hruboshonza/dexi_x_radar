@@ -21,13 +21,17 @@ _DASHES = ("—", "–")
 _COHORT_SIZE = re.compile(r"\b\d{2,4}\s+(?:tracked\s+)?(?:hyperliquid\s+)?(?:whales|wallets)\s+(?:that\s+)?we\s+track",
                           re.IGNORECASE)
 _END_PUNCT = tuple(".!?)")
+# The owner writes as "we" (DexiScan); "I" is the occasional exception.
+_SINGULAR = re.compile(r"\b(?:I|I'm|I'd|I've|I'll|my|me)\b")
+_PLURAL = re.compile(r"\b(?:we|we're|we'd|we've|we'll|our|us)\b", re.IGNORECASE)
 
 INSTRUCTIONS = """Reply radar for the @DexiScan X account. Posts arrive in a queue; you write reply
 drafts, the owner posts them by hand. Workflow: radar_pending -> for each post either radar_skip
 (off-topic) or fetch data (dexiscan_xbrief, dexiscan_whale_radar for full wallet addresses) and
 radar_save_drafts (data drafts A-C plus one general macro/quant reply G). Follow radar_playbook,
 the rudejohn-x-voice skill, and the quant-trader skill for G. Use only numbers from the post or
-from the DexiScan tools. Never state the total number of tracked wallets."""
+from the DexiScan tools. Write as "we" (DexiScan), "I" only occasionally. Never state the total
+number of tracked wallets."""
 
 
 class RadarTools:
@@ -79,6 +83,11 @@ class RadarTools:
                 warnings.append(f"{label}: last sentence has no closing punctuation")
         if not general:
             warnings.append("no general reply (G): add one unless the post gives nothing to say beyond our data")
+        all_texts = texts + ([general] if general else [])
+        singular = sum(1 for t in all_texts if _SINGULAR.search(t))
+        plural = sum(1 for t in all_texts if _PLURAL.search(t))
+        if singular > plural:
+            warnings.append("more drafts in 'I' than in 'we': the owner prefers 'we' (DexiScan)")
         if errors:
             return {"ok": False, "errors": errors}
         rnd = self.store.save_drafts(post_id, texts, general or None)

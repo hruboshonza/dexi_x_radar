@@ -286,6 +286,13 @@ class ToolsTest(unittest.TestCase):
         self.assertIn("🌐 G", text)
         self.assertEqual([b["text"] for b in kb["inline_keyboard"][0]], ["↩ A", "↩ G"])
 
+    def test_we_over_i(self):
+        warn = "more drafts in 'I' than in 'we'"
+        mostly_i = self.save(["I'd stay out of this one.", "My read: funding decides it."])
+        self.assertIn(warn, " ".join(mostly_i["warnings"]))
+        mostly_we = self.save(["We'd stay out of this one.", "Our data says funding decides it."])
+        self.assertNotIn(warn, " ".join(mostly_we["warnings"]))
+
     def test_missing_general_reply_is_a_warning(self):
         r = self.save(["Funding cost him $1.59M."])
         self.assertIn("no general reply (G)", " ".join(r["warnings"]))
