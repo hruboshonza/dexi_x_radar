@@ -148,6 +148,7 @@ cp .env.example .env     # then fill it in
 | `MCP_TOKEN` | yes | shared secret for the MCP server |
 | `MCP_PATH` | no (`/mcp`) | URL path of the MCP server (see *Troubleshooting*) |
 | `LOOKBACK_HOURS` | no (2) | how far back the very first poll reads |
+| `RADAR_URL` | bridge only | full MCP URL of the deployed radar, e.g. `https://<host>/mcp` |
 | `POLL_INTERVAL_SECONDS` | no (300) | how often to read X |
 | `MAX_POSTS_PER_POLL` | no (40) | cost guard per source per poll |
 | `WATCHLIST_FILE` | no (`watchlist.txt`) | accounts to watch |
@@ -179,22 +180,36 @@ each instance keeps its own cursors, so two instances would also read and pay tw
 
 ### 5. Connect Claude Code
 
+Directly over HTTP:
+
 ```bash
 claude mcp add --transport http dexi-x-radar https://<your-host>/mcp \
   --header "Authorization: Bearer <MCP_TOKEN>"
+```
+
+Or through the **stdio bridge**. Use this one if an antivirus breaks MCP traffic (see
+*Troubleshooting*). Claude Code then talks to a local Python process, which calls the radar
+over HTTPS. Set `RADAR_URL` and `MCP_TOKEN` in `.env`; the token then stays out of the
+Claude config.
+
+```bash
+claude mcp add dexi-x-radar -s local -e PYTHONPATH=<repo> -- <repo>/.venv/Scripts/python.exe -m dexi_x_radar bridge
 ```
 
 Then start the loop from *A* above in a Claude Code session in this folder.
 
 ## Troubleshooting
 
-**MCP calls fail with "peer unexpectedly closed connection" while `/health` works.** Some
-antivirus web filters inspect plain-HTTP MCP traffic. They act on requests whose path ends
-in `/mcp` or that carry the `mcp-protocol-version` header, and cut the response off. Seen on
-a Windows PC running Norton, over `localhost`. Fixes:
-- serve MCP under another path (`MCP_PATH=/radar`), or
-- use the Railway deployment over HTTPS, or
-- add an exception for the service in the antivirus.
+**MCP calls fail with "peer unexpectedly closed connection" or `InvalidHTTPResponse` while
+`/health` works.** Some antivirus web filters inspect MCP traffic and cut the response off.
+They act on requests whose path ends in `/mcp` or that carry the `mcp-protocol-version`
+header, over HTTP and, for some programs, over HTTPS too.
+
+Seen on a Windows PC running Norton. There, Python's HTTPS client got through, while curl
+and Claude Code did not. Fixes:
+- connect Claude Code through the **stdio bridge** (above), and
+- serve MCP under another path (`MCP_PATH=/radar`) for local plain-HTTP use, or
+- add an exception in the antivirus.
 
 ## Cost
 

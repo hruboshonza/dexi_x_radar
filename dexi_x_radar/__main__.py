@@ -1,4 +1,4 @@
-"""python -m dexi_x_radar serve | poll-once | chat-id | status"""
+"""python -m dexi_x_radar serve | poll-once | chat-id | status | bridge"""
 import asyncio
 import json
 import logging
@@ -35,10 +35,18 @@ async def _chat_id(settings) -> None:
 
 
 def main() -> None:
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     command = sys.argv[1] if len(sys.argv) > 1 else "serve"
     settings = load_settings()
+    if command == "bridge":
+        # stdout carries the MCP protocol here: no prints, logs go to stderr.
+        logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
+        from .bridge import run_bridge
+        if not settings.radar_url or not settings.mcp_token:
+            sys.exit("bridge needs RADAR_URL (e.g. https://<host>/mcp) and MCP_TOKEN in .env")
+        asyncio.run(run_bridge(settings.radar_url, settings.mcp_token))
+        return
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     if command == "serve":
         asyncio.run(serve(settings))
     elif command == "poll-once":

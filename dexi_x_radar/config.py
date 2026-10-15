@@ -31,6 +31,7 @@ class Settings:
     telegram_chat_id: str
     mcp_token: str
     mcp_path: str
+    radar_url: str
     port: int
     db_path: Path
     dexiscan_base_url: str
@@ -80,6 +81,7 @@ def load_settings(env: dict | None = None) -> Settings:
         telegram_chat_id=get("TELEGRAM_CHAT_ID"),
         mcp_token=get("MCP_TOKEN"),
         mcp_path="/" + get("MCP_PATH", "/mcp").strip("/"),
+        radar_url=get("RADAR_URL").rstrip("/"),
         port=int(get("PORT", "8080")),
         db_path=path("DB_PATH", "data/radar.db"),
         dexiscan_base_url=get("DEXISCAN_BASE_URL", "https://dexiscan.com").rstrip("/"),
