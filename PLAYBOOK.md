@@ -29,8 +29,14 @@ skill; rules here override it where they conflict.
 - Reply to: Hyperliquid screenshots (positions, PnL charts), whale stories with numbers,
   posts about leverage, blowups and copying whales, beginner-trader advice posts with few
   replies.
+- Reply to posts that claim what traders do or should do ("Friday is for booking profits",
+  "everyone is short"). Check the claim against the whale book: what the wallets we track
+  are opening and closing right now (long and short totals or one coin's book vs an
+  earlier snapshot, new adds, flows) and how their open PnL moved. (Owner, 2026-10-16.)
 - Skip: memes, airdrops and memecoins, generic motivation, TA posts where we have no data
   to add.
+- How often an author posts is not a reason to skip. Judge each post on whether our data
+  adds something (owner, 2026-10-16).
 - Round 1 picks were all right (owner, 2026-10-15).
 
 ## Shape of a reply
