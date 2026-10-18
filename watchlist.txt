@@ -7,3 +7,4 @@ tradertheory
 CryptoTArena
 coinglass_com
 brian_armstrong
+murtaza
