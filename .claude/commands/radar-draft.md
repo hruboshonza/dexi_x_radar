@@ -9,6 +9,9 @@ anything to X: the owner posts every reply by hand.
 2. Read `radar_playbook` once per session, and follow the `rudejohn-x-voice` skill. Where they
    conflict, the playbook wins (it holds the owner's own rules). Load the `quant-trader` skill
    once per session too; it supplies the lens for the general reply (G).
+   `owner_examples` in `radar_pending` are the owner's rewrites of our earlier drafts ("this is
+   how it should have sounded"). Compare each with `our_drafts` and write like the rewrite:
+   its length, structure, word choice and takeaway. They outrank the voice skill too.
 3. For each pending post, newest first:
    - **Triage.** Not worth a reply (meme, airdrop, memecoin, generic motivation, nothing we can
      add with data)? Call `radar_skip(post_id, reason)` with a short reason and move on.

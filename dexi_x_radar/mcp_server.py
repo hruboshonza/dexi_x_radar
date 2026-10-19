@@ -16,6 +16,7 @@ from .store import Store, now_iso, parse_iso
 from .telegram import Notifier
 
 MAX_DRAFT = 280
+OWNER_EXAMPLES = 10
 _DASHES = ("—", "–")
 # "77 Hyperliquid whales we track", "214 wallets we track": the owner never states the cohort size.
 _COHORT_SIZE = re.compile(r"\b\d{2,4}\s+(?:tracked\s+)?(?:hyperliquid\s+)?(?:whales|wallets)\s+(?:that\s+)?we\s+track",
@@ -28,7 +29,8 @@ _PLURAL = re.compile(r"\b(?:we|we're|we'd|we've|we'll|our|us)\b", re.IGNORECASE)
 INSTRUCTIONS = """Reply radar for the @DexiScan X account. Posts arrive in a queue; you write reply
 drafts, the owner posts them by hand. Workflow: radar_pending -> for each post either radar_skip
 (off-topic) or fetch data (dexiscan_xbrief, dexiscan_whale_radar for full wallet addresses) and
-radar_save_drafts (data drafts A-C plus one general macro/quant reply G). Follow radar_playbook,
+radar_save_drafts (data drafts A-C plus one general macro/quant reply G). `owner_examples` in
+radar_pending are the owner's own rewrites of earlier drafts: write like them. Follow radar_playbook,
 the rudejohn-x-voice skill, and the quant-trader skill for G. Use only numbers from the post or
 from the DexiScan tools. Write as "we" (DexiScan), "I" only occasionally. Never state the total
 number of tracked wallets."""
@@ -51,6 +53,17 @@ class RadarTools:
             "metrics": post["metrics"], "note": post.get("note"),
         }
 
+    def ideal_rewrites(self, since: str = "", limit: int | None = None) -> list[dict]:
+        """The owner's "this is how it should have sounded", newest first, next to our drafts."""
+        ideals = [f for f in self.store.feedback(since=since) if f["kind"] == "ideal"][::-1][:limit]
+        out = []
+        for f in ideals:
+            post = self.store.post(f["post_id"]) or {}
+            out.append({"post_id": f["post_id"], "author": post.get("author"), "post": (post.get("text") or "")[:500],
+                        "our_drafts": {d["label"]: d["text"] for d in self.store.latest_drafts(f["post_id"])},
+                        "owner_ideal": f["value"], "at": f["created_at"]})
+        return out
+
     def pending(self, limit: int = 5) -> dict:
         posts = self.store.posts(status="pending", limit=limit)
         out = []
@@ -61,7 +74,8 @@ class RadarTools:
             view["regenerate"] = any(f["kind"] == "regen" for f in feedback)
             view["previous_drafts"] = self.store.all_drafts(p["id"])
             out.append(view)
-        return {"pending": out, "count": len(out)}
+        return {"pending": out, "count": len(out),
+                "owner_examples": self.ideal_rewrites(limit=OWNER_EXAMPLES) if out else []}
 
     async def save_drafts(self, post_id: str, drafts: list[str], note: str = "", general: str = "") -> dict:
         post = self.store.post(post_id)
@@ -138,9 +152,9 @@ class RadarTools:
         for p in self.store.posts(limit=1000):
             if p["fetched_at"] < since:
                 continue
-            a = per_author.setdefault(p["author"], {"posts": 0, "sent": 0, "skipped": 0, "ignored": 0})
+            a = per_author.setdefault(p["author"], {"posts": 0, "sent": 0, "skipped": 0, "ignored": 0, "dismissed": 0})
             a["posts"] += 1
-            if p["status"] in ("sent", "skipped", "ignored"):
+            if p["status"] in ("sent", "skipped", "ignored", "dismissed"):
                 a[p["status"]] += 1
         return {
             "since": since,
@@ -149,6 +163,8 @@ class RadarTools:
             "sent": sent,
             "owner_skip_reasons": skips,
             "edit_instructions": [f["value"] for f in feedback if f["kind"] == "edit"],
+            "ideal_rewrites": self.ideal_rewrites(since=since),
+            "dismissed": sum(1 for f in feedback if f["kind"] == "dismiss"),
             "regenerate_requests": sum(1 for f in feedback if f["kind"] == "regen"),
             "per_author": per_author,
         }
@@ -164,7 +180,8 @@ def build_mcp(tools: RadarTools, path: str = "/mcp") -> FastMCP:
 
     @mcp.tool()
     def radar_pending(limit: int = 5) -> dict:
-        """Posts waiting for drafts, newest first, with owner instructions and earlier drafts."""
+        """Posts waiting for drafts, newest first, with owner instructions and earlier drafts.
+        `owner_examples`: the owner's latest rewrites of our drafts (how a reply should sound)."""
         return tools.pending(limit)
 
     @mcp.tool()
@@ -184,7 +201,7 @@ def build_mcp(tools: RadarTools, path: str = "/mcp") -> FastMCP:
 
     @mcp.tool()
     def radar_queue(status: str | None = None, limit: int = 20) -> dict:
-        """The queue, optionally by status: pending | drafted | sent | skipped | ignored."""
+        """The queue, optionally by status: pending | drafted | sent | skipped | ignored | dismissed."""
         return tools.queue(status, limit)
 
     @mcp.tool()
@@ -194,7 +211,8 @@ def build_mcp(tools: RadarTools, path: str = "/mcp") -> FastMCP:
 
     @mcp.tool()
     def radar_feedback(days: int = 7) -> dict:
-        """What the owner posted vs the drafts, skip reasons, edit instructions, outcomes, per account."""
+        """What the owner posted vs the drafts, skip reasons, edit instructions, the owner's ideal
+        rewrites, outcomes, per account."""
         return tools.feedback_summary(days)
 
     @mcp.tool()

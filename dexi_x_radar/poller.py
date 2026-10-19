@@ -1,4 +1,4 @@
-"""One poll cycle every POLL_INTERVAL_SECONDS: new posts in, own replies matched, stale posts out."""
+"""One poll cycle every POLL_INTERVAL_SECONDS: new posts in, own replies matched, undrafted stale posts out."""
 import asyncio
 import logging
 
@@ -55,6 +55,7 @@ class Poller:
             sent = []
 
         ignored = self._ignore_stale()
+        revived = self.store.revive_ignored_drafts()
         await self._outcomes()
 
         # Drafted posts whose message failed to send get another try.
@@ -65,13 +66,11 @@ class Poller:
             for post in self.store.posts(status="pending", limit=500):
                 if post.get("tg_message_id") and not self.store.latest_drafts(post["id"]):
                     await self.notifier.drop(post["id"])
-        for post_id in sent:
+        for post_id in sent + revived:
             await self._show(post_id)
-        for post_id in ignored:
-            # A stale post with drafts keeps its message, marked; one without drafts leaves no trace.
-            if self.store.latest_drafts(post_id):
-                await self._show(post_id)
-            elif self.notifier:
+        # Only posts without drafts go stale, and they leave no trace.
+        if self.notifier:
+            for post_id in ignored:
                 await self.notifier.drop(post_id)
 
         summary = {"new": len(new_ids), "sent": len(sent), "ignored": len(ignored),

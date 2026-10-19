@@ -24,6 +24,13 @@ skill; rules here override it where they conflict.
 - A figure we do not have is written `[VALUE]` and flagged. It is never estimated.
 - Render locally: card HTML with `bundle.css` → headless Chrome screenshot → PNG.
 
+## Owner's ideal wording
+
+- `owner_examples` (in `radar_pending`) and `ideal_rewrites` (in `radar_feedback`) are the
+  owner's rewrites of our drafts, sent with 💡 whether the post went out or not. They are
+  the strongest voice signal: write like them. A pattern that repeats becomes a rule in
+  this file. (Owner, 2026-10-19.)
+
 ## Triage
 
 - Reply to: Hyperliquid screenshots (positions, PnL charts), whale stories with numbers,

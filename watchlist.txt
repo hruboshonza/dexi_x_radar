@@ -1,10 +1,11 @@
 # One X handle per line, without @. Lines starting with # are ignored.
 AshCrypto
 Stefan_B_Trades
-lookonchain
 MoonKing___
 tradertheory
 CryptoTArena
 coinglass_com
 brian_armstrong
 murtaza
+MBxxvv
+TPlechac

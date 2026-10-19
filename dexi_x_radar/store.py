@@ -5,7 +5,8 @@ What it remembers:
 2. posts       the queue; a post id is the primary key, so a post reaches the phone once
 3. drafts      every draft round per post (a Telegram button carries only the post id)
 4. replies     what the owner actually posted, matched to the drafts
-5. feedback    skip reasons, edit instructions, regenerate requests
+5. feedback    skip reasons, edit instructions, regenerate requests, the owner's ideal wording,
+                dismissals
 """
 import json
 import sqlite3
@@ -41,7 +42,7 @@ CREATE TABLE IF NOT EXISTS posts (
     addresses TEXT NOT NULL DEFAULT '[]',
     metrics TEXT NOT NULL DEFAULT '{}',
     fetched_at TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'pending',   -- pending | drafted | sent | skipped | ignored
+    status TEXT NOT NULL DEFAULT 'pending',   -- pending | drafted | sent | skipped | ignored | dismissed
     note TEXT,                                -- Claude: reply type and the data used
     skip_by TEXT,                             -- owner | claude
     skip_reason TEXT,
@@ -74,7 +75,7 @@ CREATE INDEX IF NOT EXISTS idx_replies_post ON replies(post_id);
 CREATE TABLE IF NOT EXISTS feedback (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     post_id TEXT NOT NULL,
-    kind TEXT NOT NULL,               -- skip | edit | regen
+    kind TEXT NOT NULL,               -- skip | edit | regen | ideal | dismiss
     value TEXT,
     created_at TEXT NOT NULL
 );
@@ -185,12 +186,23 @@ class Store:
         self._x("UPDATE posts SET tg_message_id = ? WHERE id = ?", (message_id, post_id))
 
     def stale_open_posts(self, older_than_hours: float) -> list[dict]:
-        """Queued posts the owner never answered within the window."""
+        """Queued posts that never got drafts within the window. A post with drafts stays open
+        until the owner dismisses it: they review old drafts and send feedback on them."""
         cutoff = (datetime.now(timezone.utc) - timedelta(hours=older_than_hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
         rows = self._q(
-            "SELECT * FROM posts WHERE status IN ('pending', 'drafted') AND created_at < ?", (cutoff,)
+            "SELECT * FROM posts WHERE status = 'pending' AND created_at < ? "
+            "AND NOT EXISTS (SELECT 1 FROM drafts WHERE drafts.post_id = posts.id)", (cutoff,)
         )
         return [_post_dict(r) for r in rows]
+
+    def revive_ignored_drafts(self) -> list[str]:
+        """Posts with drafts that the old 6 h timeout marked ignored go back to drafted."""
+        rows = self._q("SELECT id FROM posts WHERE status = 'ignored' "
+                       "AND EXISTS (SELECT 1 FROM drafts WHERE drafts.post_id = posts.id)")
+        ids = [r["id"] for r in rows]
+        for post_id in ids:
+            self.set_status(post_id, "drafted")
+        return ids
 
     # ── drafts ─────────────────────────────────────────────────────────────────
     def save_drafts(self, post_id: str, texts: list[str], general: str | None = None) -> int:

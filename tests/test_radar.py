@@ -74,6 +74,23 @@ class StoreTest(unittest.TestCase):
         self.store.insert_post(make_post("new", minutes_ago=10))
         self.assertEqual([p["id"] for p in self.store.stale_open_posts(6)], ["old"])
 
+    def test_drafted_posts_never_go_stale(self):
+        for pid, status in (("drafted", "drafted"), ("redraft", "pending")):
+            self.store.insert_post(make_post(pid, minutes_ago=3 * 24 * 60))
+            self.store.save_drafts(pid, ["Funding cost him $1.59M."])
+            self.store.set_status(pid, status)
+        self.assertEqual(self.store.stale_open_posts(6), [])
+
+    def test_ignored_posts_with_drafts_are_revived(self):
+        self.store.insert_post(make_post("1"))
+        self.store.insert_post(make_post("2"))
+        self.store.save_drafts("1", ["Funding cost him $1.59M."])
+        self.store.set_status("1", "ignored")
+        self.store.set_status("2", "ignored")
+        self.assertEqual(self.store.revive_ignored_drafts(), ["1"])
+        self.assertEqual(self.store.post("1")["status"], "drafted")
+        self.assertEqual(self.store.post("2")["status"], "ignored")
+
 
 class RenderTest(unittest.TestCase):
     def test_drafted_message_fits_telegram(self):
@@ -231,6 +248,9 @@ class DeliveryTest(unittest.TestCase):
             settings = load_settings({"WATCHLIST_FILE": str(wl), "DB_PATH": ":memory:"})
             store = Store(":memory:")
             store.insert_post(make_post("old", minutes_ago=7 * 60))
+            store.insert_post(make_post("old-drafted", minutes_ago=7 * 60))
+            store.save_drafts("old-drafted", ["Funding cost him $1.59M."])
+            store.set_status("old-drafted", "drafted")
             store.insert_post(make_post("leftover", minutes_ago=30))
             store.set_message_id("leftover", 9)
             notifier = RecordingNotifier()
@@ -240,8 +260,57 @@ class DeliveryTest(unittest.TestCase):
                     return [], {}
             asyncio.run(Poller(settings, store, QuietOwner(), notifier).cycle())
             self.assertEqual(store.post("old")["status"], "ignored")
+            self.assertEqual(store.post("old-drafted")["status"], "drafted")
             self.assertIn("old", notifier.dropped)
+            self.assertNotIn("old-drafted", notifier.dropped)
             self.assertIn("leftover", notifier.dropped)
+
+    def bot(self, store):
+        from dexi_x_radar.telegram import BotLoop
+        notifier, tg = self.notifier(store)
+        return BotLoop(store, tg, notifier, chat_id="1"), tg
+
+    def press(self, bot, data):
+        asyncio.run(bot.handle({"callback_query": {"id": "c", "data": data,
+                                                   "message": {"chat": {"id": 1}, "message_id": 55}}}))
+
+    def test_ideal_wording_is_feedback_only(self):
+        store = Store(":memory:")
+        store.insert_post(make_post("1"))
+        store.save_drafts("1", ["Funding cost him $1.59M."])
+        store.set_status("1", "sent")
+        bot, tg = self.bot(store)
+        self.press(bot, "i:1")
+        self.assertTrue(tg.calls[-1][1]["text"].startswith("Ideální znění #1"))
+        asyncio.run(bot.handle({"message": {"chat": {"id": 1}, "text": "We'd wait for funding to flip.",
+                                            "reply_to_message": {"text": "Ideální znění #1"}}}))
+        self.assertEqual([(f["kind"], f["value"]) for f in store.feedback(post_id="1")],
+                         [("ideal", "We'd wait for funding to flip.")])
+        self.assertEqual(store.post("1")["status"], "sent", "no new round")
+
+    def test_delete_needs_a_confirmation(self):
+        store = Store(":memory:")
+        store.insert_post(make_post("1"))
+        store.save_drafts("1", ["Funding cost him $1.59M."])
+        store.set_status("1", "drafted")
+        store.set_message_id("1", 55)
+        bot, tg = self.bot(store)
+        self.press(bot, "d:1")
+        self.assertEqual(tg.calls[-1][0], "editMessageReplyMarkup")
+        self.press(bot, "dn:1")
+        self.assertEqual(store.post("1")["tg_message_id"], 55)
+        self.press(bot, "dd:1")
+        self.assertEqual(tg.calls[-1][0], "deleteMessage")
+        self.assertEqual(store.post("1")["status"], "dismissed")
+        self.assertIsNone(store.post("1")["tg_message_id"])
+        self.assertEqual(store.unshown_open_posts(), [], "a deleted post is not sent again")
+
+    def test_old_drafts_keep_their_buttons(self):
+        post = {**make_post("1"), "status": "sent"}
+        _, kb = render(post, DRAFTS[:1])
+        labels = [b["text"] for row in kb["inline_keyboard"] for b in row]
+        self.assertIn("💡 Ideál", labels)
+        self.assertIn("🗑 Smazat", labels)
 
     def test_setup_mode_answers_start_with_the_chat_id(self):
         from dexi_x_radar.telegram import BotLoop
@@ -301,6 +370,15 @@ class ToolsTest(unittest.TestCase):
         self.store.add_feedback("1", "edit", "kratší")
         view = self.tools.pending()["pending"][0]
         self.assertEqual(view["owner_instructions"], ["kratší"])
+
+    def test_ideal_rewrites_reach_the_drafting_session(self):
+        self.store.insert_post(make_post("2", text="Friday is for booking profits"))
+        self.store.save_drafts("2", ["Whales are adding, not booking."])
+        self.store.add_feedback("2", "ideal", "Our whales are adding into Friday. We'd stay long.")
+        example = self.tools.pending()["owner_examples"][0]
+        self.assertEqual(example["our_drafts"], {"A": "Whales are adding, not booking."})
+        self.assertEqual(example["owner_ideal"], "Our whales are adding into Friday. We'd stay long.")
+        self.assertEqual(len(self.tools.feedback_summary()["ideal_rewrites"]), 1)
 
 
 class LoggingTest(unittest.TestCase):

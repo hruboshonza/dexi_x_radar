@@ -1,7 +1,9 @@
 """Telegram: one message per queued post, edited in place as the post moves through the queue.
 
 Buttons: ↩ opens X with the reply prefilled (the owner posts), Copy puts a draft on the
-clipboard, Edit asks for an instruction, Again asks for a new round, Skip asks for a reason.
+clipboard, Edit asks for an instruction, Again asks for a new round, Skip asks for a reason,
+Ideal asks how the reply should have sounded (feedback only, no new round), Delete removes
+the message after a confirmation. A message stays until the owner deletes it.
 The bot answers only TELEGRAM_CHAT_ID.
 """
 import asyncio
@@ -27,6 +29,7 @@ SKIP_REASONS = {
     "other": "Jiné",
 }
 EDIT_PROMPT = "Pokyn k úpravě #{post_id}"
+IDEAL_PROMPT = "Ideální znění #{post_id}"
 _EDIT_PROMPT_RE = re.compile(r"#(\d+)")
 
 
@@ -95,6 +98,8 @@ def render(post: dict, drafts: list[dict], reply: dict | None = None) -> tuple[s
         lines.append(f"⏭ <i>přeskočeno ({who}): {e(post.get('skip_reason') or '')}</i>")
     elif status == "ignored":
         lines.append("💤 <i>bez odpovědi, vyřazeno</i>")
+    elif status == "dismissed":
+        lines.append("🗑 <i>smazáno</i>")
     elif status == "sent" and reply:
         label = reply["matched"].replace("merged:", "spojeno ").replace("~", " upraveno")
         lines.append(f"✅ <b>odesláno</b> ({e(label)}) · <a href=\"https://x.com/i/status/{reply['id']}\">tvoje reply</a>")
@@ -105,6 +110,8 @@ def render(post: dict, drafts: list[dict], reply: dict | None = None) -> tuple[s
 
     open_btn = {"text": "Otevřít post", "url": post["url"]}
     pid = post["id"]
+    review = [{"text": "💡 Ideál", "callback_data": f"i:{pid}"}] if drafts else []
+    delete_btn = {"text": "🗑 Smazat", "callback_data": f"d:{pid}"}
     if status == "drafted" and drafts:
         reply_row = [{"text": f"↩ {d['label']}", "url": intent_url(pid, d["text"])} for d in drafts]
         copy_row = [{"text": f"📋 {d['label']}", "copy_text": {"text": d["text"]}}
@@ -112,18 +119,24 @@ def render(post: dict, drafts: list[dict], reply: dict | None = None) -> tuple[s
         actions = [{"text": "✏️ Upravit", "callback_data": f"e:{pid}"},
                    {"text": "🔄 Znovu", "callback_data": f"r:{pid}"},
                    {"text": "⏭ Skip", "callback_data": f"s:{pid}"}]
-        rows = [reply_row] + ([copy_row] if copy_row else []) + [actions, [open_btn]]
+        rows = [reply_row] + ([copy_row] if copy_row else []) + [actions, review + [delete_btn], [open_btn]]
         return message, {"inline_keyboard": rows}
     if status == "pending":
         return message, {"inline_keyboard": [[open_btn, {"text": "⏭ Skip", "callback_data": f"s:{pid}"}]]}
     if status == "skipped" and post.get("skip_by") == "claude":
-        return message, {"inline_keyboard": [[open_btn, {"text": "🔄 Přesto navrhni", "callback_data": f"r:{pid}"}]]}
-    return message, {"inline_keyboard": [[open_btn]]}
+        return message, {"inline_keyboard": [[open_btn, {"text": "🔄 Přesto navrhni", "callback_data": f"r:{pid}"}],
+                                             [delete_btn]]}
+    return message, {"inline_keyboard": [review + [delete_btn], [open_btn]]}
 
 
 def skip_keyboard(post_id: str) -> dict:
     buttons = [{"text": label, "callback_data": f"sr:{post_id}:{code}"} for code, label in SKIP_REASONS.items()]
     return {"inline_keyboard": [buttons[:3], buttons[3:]]}
+
+
+def delete_keyboard(post_id: str) -> dict:
+    return {"inline_keyboard": [[{"text": "🗑 Ano, smazat", "callback_data": f"dd:{post_id}"},
+                                 {"text": "Ne", "callback_data": f"dn:{post_id}"}]]}
 
 
 class Notifier:
@@ -249,10 +262,34 @@ class BotLoop:
                 EDIT_PROMPT.format(post_id=rest),
                 reply_markup={"force_reply": True, "input_field_placeholder": "např. kratší, přidej závěr"},
             )
+        elif kind == "i":
+            await self.notifier.say(
+                IDEAL_PROMPT.format(post_id=rest),
+                reply_markup={"force_reply": True, "input_field_placeholder": "jak by odpověď měla znít"},
+            )
+        elif kind == "d":
+            await self.tg.call("editMessageReplyMarkup", chat_id=self.chat_id,
+                               message_id=cb["message"]["message_id"], reply_markup=delete_keyboard(rest))
+        elif kind == "dn":
+            await self.notifier.show(rest)
+        elif kind == "dd":
+            post = self.store.post(rest)
+            if post:
+                self.store.add_feedback(rest, "dismiss")
+                # A sent or skipped post keeps its status; an open one is closed so it is not re-sent.
+                if post["status"] in ("pending", "drafted"):
+                    self.store.set_status(rest, "dismissed")
+                await self.notifier.drop(rest)
 
     async def on_message(self, msg: dict) -> None:
         text = (msg.get("text") or "").strip()
         prompt = (msg.get("reply_to_message") or {}).get("text", "")
+        if prompt.startswith(IDEAL_PROMPT.split("#")[0]) and (m := _EDIT_PROMPT_RE.search(prompt)) and text:
+            post_id = m.group(1)
+            if self.store.post(post_id):
+                self.store.add_feedback(post_id, "ideal", text)
+                await self.notifier.say("Zapsáno. Claude to uvidí u dalších návrhů.")
+            return
         if prompt.startswith(EDIT_PROMPT.split("#")[0]) and (m := _EDIT_PROMPT_RE.search(prompt)) and text:
             post_id = m.group(1)
             if self.store.post(post_id):

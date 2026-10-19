@@ -56,7 +56,7 @@ Claude Code on your own machine, logged in with your Claude subscription, runs t
   server.
 - Drafts are written by the strongest model you have in Claude Code.
 - Drafts only appear while that session is running. While it is off, nothing reaches
-  your phone. Posts keep queueing, and those still unanswered after 6 h are dropped. A
+  your phone. Posts keep queueing, and those still undrafted after 6 h are dropped. A
   `/loop` expires after 7 days; start it again.
 
 ### B. MCP server from any Claude client (on demand)
@@ -103,7 +103,9 @@ latest posts every cycle (cheap "owned reads"):
   - **merged** when it combines drafts,
   - **own** when it matches none.
   The diff (what you added or cut) is stored.
-- A queued post with no reply after 6 h becomes **ignored**, which is an implicit skip.
+- A post with drafts stays on your phone until you delete it (🗑, with a confirmation),
+  so you can come back to old drafts and give feedback. Only a post that never got
+  drafts becomes **ignored** after 6 h.
 
 ## Feedback
 
@@ -112,6 +114,8 @@ latest posts every cycle (cheap "owned reads"):
 | Which draft, what you changed | your posted reply vs the drafts | voice and format rules |
 | Skip + reason (off-topic / weak data / tone / too late) | Telegram button | triage and watchlist |
 | Edit instructions ("shorter", "add a takeaway") | Telegram reply | recurring fixes |
+| Ideal wording (💡: how the reply should have sounded, posted or not) | Telegram reply | voice, by example: the latest ones go with every `radar_pending` |
+| Delete (🗑) without a reply | Telegram button | what was not worth answering |
 | Likes, replies, impressions after 24 h; did the author answer | X API, one read per reply | what actually works |
 
 Once a week Claude reads the feedback over MCP and proposes concrete `PLAYBOOK.md`
