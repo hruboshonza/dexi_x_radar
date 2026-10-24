@@ -160,6 +160,8 @@ class Drafter:
         verdict = await self.triage(post)
         # A redraft or an edit the owner asked for is never triaged away.
         if not verdict["reply"] and not (post["owner_instructions"] or post["regenerate"]):
+            if not self._still_pending(post["id"]):
+                return "taken"
             await self.tools.skip(post["id"], verdict["reason"] or "triage")
             return "skipped"
         market = verdict["market"]
@@ -208,6 +210,8 @@ class Drafter:
                 resp = await self._call(self.s.draft_model, self._draft_system, messages, DRAFT_SCHEMA,
                                         effort=self.s.draft_effort, max_tokens=16000)
             out = _json(resp)
+            if not self._still_pending(post["id"]):
+                return "taken"
             if out["skip_reason"].strip() and not out["drafts"]:
                 await self.tools.skip(post["id"], out["skip_reason"].strip())
                 return "skipped"
@@ -266,6 +270,14 @@ class Drafter:
                                     "/radar-draft lokálně.")
         except Exception:
             log.warning("could not send the budget notice")
+
+    def _still_pending(self, post_id: str) -> bool:
+        """False when an MCP client drafted or skipped the post while this call ran."""
+        post = self.store.post(post_id)
+        if post and post["status"] == "pending":
+            return True
+        log.info("post %s was handled elsewhere meanwhile, result dropped", post_id)
+        return False
 
     def _due(self, post_id: str) -> bool:
         count, at = self._failed.get(post_id, (0, 0.0))

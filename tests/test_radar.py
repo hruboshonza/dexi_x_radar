@@ -601,6 +601,20 @@ class DrafterTest(unittest.TestCase):
         self.assertEqual(self.client.calls, [])
         self.assertEqual(self.store.post("1")["status"], "pending")
 
+    def test_a_post_drafted_elsewhere_meanwhile_is_left_alone(self):
+        drafter = self.drafter(REPLY, DRAFTED)
+        create = self.client.create
+
+        async def local_session_wins(**kwargs):
+            resp = await create(**kwargs)
+            if len(self.client.calls) == 2:
+                self.store.save_drafts("1", ["Drafted over MCP."])
+                self.store.set_status("1", "drafted")
+            return resp
+        self.client.create = local_session_wins
+        self.assertEqual(asyncio.run(drafter.run_once()), {"1": "taken"})
+        self.assertEqual([d["text"] for d in self.store.latest_drafts("1")], ["Drafted over MCP."])
+
     def test_quiet_hours_stop_drafting(self):
         drafter = self.drafter(REPLY, DRAFTED)
         drafter.quiet = types.SimpleNamespace(active=lambda: True)
