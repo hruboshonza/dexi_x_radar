@@ -43,7 +43,8 @@ _PLURAL = re.compile(r"\b(?:we|we're|we'd|we've|we'll|our|us)\b", re.IGNORECASE)
 INSTRUCTIONS = """Reply radar for the @DexiScan X account. Posts arrive in a queue; you write reply
 drafts, the owner posts them by hand. Workflow: radar_pending -> for each post either radar_skip
 (our data adds nothing) or fetch data (dexiscan_xbrief, dexiscan_whale_radar for full wallet
-addresses) and radar_save_drafts (1-3 drafts, each built on DexiScan data). The humanizer skill
+addresses) and radar_save_drafts (1-3 drafts built on DexiScan data, plus one general reply G
+without data: constructive criticism or a macro point the post leaves out). The humanizer skill
 decides how drafts are written: write them, run its process, save only the final text.
 `owner_examples` in radar_pending are the owner's own writing next to our drafts (owner_ideal: a 💡
 rewrite; owner_posted: what the owner actually posted after changing them): humanizer's writing sample.
@@ -114,15 +115,16 @@ class RadarTools:
         return {"pending": out, "count": len(out),
                 "owner_examples": self.owner_examples() if out else []}
 
-    async def save_drafts(self, post_id: str, drafts: list[str], note: str = "") -> dict:
+    async def save_drafts(self, post_id: str, drafts: list[str], note: str = "", general: str = "") -> dict:
         post = self.store.post(post_id)
         if not post:
             return {"ok": False, "error": f"unknown post {post_id}"}
         texts = [d.strip() for d in drafts if d and d.strip()]
+        general = (general or "").strip()
         if not 1 <= len(texts) <= 3:
             return {"ok": False, "error": "send 1 to 3 drafts, the full reply first"}
         errors, warnings = [], []
-        for label, text in zip("ABC", texts):
+        for label, text in list(zip("ABC", texts)) + ([("G", general)] if general else []):
             if any(ch in text for ch in _DASHES):
                 errors.append(f"{label}: contains an em or en dash")
             if len(text) > MAX_DRAFT:
@@ -133,13 +135,16 @@ class RadarTools:
             for name, pattern in _HUMANIZER_TELLS:
                 if m := pattern.search(plain):
                     errors.append(f'{label}: {name}: "{m.group(0).strip()}"')
-        singular = sum(1 for t in texts if _SINGULAR.search(t))
-        plural = sum(1 for t in texts if _PLURAL.search(t))
+        if not general:
+            warnings.append("no general reply (G): add one unless the post gives nothing to argue with or add to")
+        all_texts = texts + ([general] if general else [])
+        singular = sum(1 for t in all_texts if _SINGULAR.search(t))
+        plural = sum(1 for t in all_texts if _PLURAL.search(t))
         if singular > plural:
             warnings.append("more drafts in 'I' than in 'we': the owner prefers 'we' (DexiScan)")
         if errors:
             return {"ok": False, "errors": errors}
-        rnd = self.store.save_drafts(post_id, texts)
+        rnd = self.store.save_drafts(post_id, texts, general or None)
         self.store.set_status(post_id, "drafted", note=note or None, skip_by=None, skip_reason=None)
         if self.notifier:
             await self.notifier.show(post_id, ping=True)
@@ -221,14 +226,16 @@ def build_mcp(tools: RadarTools, path: str = "/mcp") -> FastMCP:
         return tools.pending(limit)
 
     @mcp.tool()
-    async def radar_save_drafts(post_id: str, drafts: list[str], note: str = "") -> dict:
+    async def radar_save_drafts(post_id: str, drafts: list[str], general: str = "", note: str = "") -> dict:
         """Save the drafts and push them to the owner's phone as one message under the post.
-        `drafts`: 1-3 replies (A, B, C), the full reply first, each built on DexiScan data and
-        passed through the humanizer skill (final text only).
+        `drafts`: 1-3 replies (A, B, C), the full reply first, each built on DexiScan data.
+        `general`: one general reply (G) with no DexiScan data: constructive criticism of the
+        post's claim, or a macro or economic point it leaves out.
+        Every text goes through the humanizer skill first (final text only).
         `note`: the angle and the data used, e.g. "Whale flip vs ETF week · xbrief BTC book".
         Rejected: em/en dashes, over 280 chars, stating the total number of tracked wallets,
         the strongest humanizer tells (not X but Y, staged lines, stock AI words, chatbot residue)."""
-        return await tools.save_drafts(post_id, drafts, note)
+        return await tools.save_drafts(post_id, drafts, note, general)
 
     @mcp.tool()
     async def radar_skip(post_id: str, reason: str) -> dict:

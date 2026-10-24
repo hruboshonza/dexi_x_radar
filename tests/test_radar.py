@@ -338,11 +338,28 @@ class ToolsTest(unittest.TestCase):
         self.assertEqual(self.store.post("1")["status"], "pending")
 
     def test_saves_clean_drafts(self):
-        r = self.save(["Funding cost him $1.59M.", "Size tells you conviction"])
+        r = asyncio.run(self.tools.save_drafts("1", ["Funding cost him $1.59M.", "Size tells you conviction"], "n",
+                                               general="At 14x, a 7% move ends it."))
         self.assertTrue(r["ok"])
         self.assertEqual(r["warnings"], [])
         self.assertEqual(self.store.post("1")["status"], "drafted")
-        self.assertEqual([d["label"] for d in self.store.latest_drafts("1")], ["A", "B"])
+        self.assertEqual([d["label"] for d in self.store.latest_drafts("1")], ["A", "B", "G"])
+
+    def test_general_reply_is_validated_and_rendered(self):
+        bad = asyncio.run(self.tools.save_drafts("1", ["Funding cost him $1.59M."], "n",
+                                                 general="Rates matter, not the chart."))
+        self.assertFalse(bad["ok"])
+        self.assertIn("G: 'not X but Y' contrast", " ".join(bad["errors"]))
+        ok = asyncio.run(self.tools.save_drafts("1", ["Funding cost him $1.59M."], "n",
+                                                general="At 14x, a 7% move ends it. We'd size down."))
+        self.assertTrue(ok["ok"])
+        text, kb = render(self.store.post("1"), self.store.latest_drafts("1"))
+        self.assertIn("🌐 G", text)
+        self.assertEqual([b["text"] for b in kb["inline_keyboard"][0]], ["↩ A", "↩ G"])
+
+    def test_missing_general_reply_is_a_warning(self):
+        r = self.save(["Funding cost him $1.59M."])
+        self.assertIn("no general reply (G)", " ".join(r["warnings"]))
 
     def test_rejects_humanizer_tells(self):
         r = self.save(["We'd expect grind, not fireworks.",
@@ -362,13 +379,6 @@ class ToolsTest(unittest.TestCase):
                        "We'd cut size before the events rather than widen stops after.",
                        "Not for everyone. Whales stayed net short and are up $1.26M."])
         self.assertTrue(r["ok"], r.get("errors"))
-
-    def test_older_general_drafts_still_render(self):
-        drafts = [{"label": "A", "text": "Funding cost him $1.59M.", "round": 1},
-                  {"label": "G", "text": "At 14x, a 7% move ends it.", "round": 1}]
-        text, kb = render({**make_post("1"), "status": "drafted"}, drafts)
-        self.assertIn("🌐 G", text)
-        self.assertEqual([b["text"] for b in kb["inline_keyboard"][0]], ["↩ A", "↩ G"])
 
     def test_we_over_i(self):
         warn = "more drafts in 'I' than in 'we'"

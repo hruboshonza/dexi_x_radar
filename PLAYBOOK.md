@@ -13,8 +13,9 @@ reactions.
 
 Every draft has to pass three questions:
 
-1. Does it tell the post's readers something they didn't know? That means a DexiScan
-   number (x-brief or Whale Radar) tied to what the post says.
+1. Does it tell the post's readers something they didn't know? For A to C that means a
+   DexiScan number (x-brief or Whale Radar) tied to what the post says; for G, an argument
+   the post leaves out.
 2. Can someone get it in one read on a phone?
 3. Would someone want to answer it, like it or open our profile?
 
@@ -61,10 +62,28 @@ owner approves the change.
 
 ## Drafts
 
-- 1 to 3 drafts per post, all built on DexiScan data. Give them different angles or
-  lengths so the owner has a real choice: usually a full reply (finding, context, what
-  follows) and a one-liner with the single strongest number.
+- 1 to 3 data drafts (A, B, C) per post, built on DexiScan data. Give them different
+  angles or lengths so the owner has a real choice: usually a full reply (finding,
+  context, what follows) and a one-liner with the single strongest number.
+- Plus one general reply (G), see below.
 - `$CASHTAGS` for coins, because people search for them.
+
+## General reply (G)
+
+G is built without DexiScan data. It adds what an experienced trader would say to the
+post: constructive criticism of its claim, or a macro or economic point it leaves out.
+Useful angles:
+
+- the macro and liquidity regime (rates, the dollar, risk appetite);
+- funding, basis and crowded positioning, and who is forced to act;
+- volatility and liquidation mechanics;
+- position sizing and risk of ruin;
+- a base rate the post ignores.
+
+Criticism goes at the claim, never at the author, and says what would make the claim
+hold. Numbers come only from the post or from simple math on them (at 14x leverage a
+move of about 7% liquidates). G goes through the same humanizer pass and the same hard
+limits. Leave it out only when the post gives nothing to argue with or add to.
 
 ## Data
 
@@ -85,7 +104,7 @@ owner approves the change.
 
 ## Hard limits
 
-`radar_save_drafts` rejects a draft that breaks one of these.
+`radar_save_drafts` rejects any draft, G included, that breaks one of these.
 
 - At most 280 characters.
 - No em or en dashes.

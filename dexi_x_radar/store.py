@@ -205,13 +205,14 @@ class Store:
         return ids
 
     # ── drafts ─────────────────────────────────────────────────────────────────
-    def save_drafts(self, post_id: str, texts: list[str]) -> int:
-        """Drafts are labelled A, B, C in order."""
+    def save_drafts(self, post_id: str, texts: list[str], general: str | None = None) -> int:
+        """Data drafts are A, B, C; the general reply (no DexiScan data) is G."""
         rows = self._q("SELECT COALESCE(MAX(round), 0) AS r FROM drafts WHERE post_id = ?", (post_id,))
         rnd = rows[0]["r"] + 1
         stamp = now_iso()
+        items = list(zip("ABC", texts)) + ([("G", general)] if general else [])
         with self._lock:
-            for label, text in zip("ABC", texts):
+            for label, text in items:
                 self._db.execute(
                     "INSERT INTO drafts (post_id, round, label, text, created_at) VALUES (?, ?, ?, ?, ?)",
                     (post_id, rnd, label, text, stamp),

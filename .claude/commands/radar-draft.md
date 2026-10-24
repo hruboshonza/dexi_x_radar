@@ -19,10 +19,14 @@ anything to X: the owner posts every reply by hand.
      owner wants a different angle than `previous_drafts`.
    - **Write 1-3 drafts** per the playbook. Each one opens with a DexiScan finding tied to the
      post and gives the readers something they didn't have.
-   - **Humanize.** Run the humanizer process on every draft: mark the tells, rewrite, check
-     that no fact or number was added or lost, search again for the tells that survive most
-     often. Keep only the final text.
-   - **Save.** Call `radar_save_drafts(post_id, drafts, note)`. `note` is one line naming the
-     angle and the data used, e.g. `Whale flip vs ETF week · xbrief BTC book`. If the tool
-     returns errors, rewrite the flagged drafts with humanizer and save again.
+   - **Write one general reply (G)** per the playbook, with no DexiScan data: constructive
+     criticism of the post's claim, or a macro or economic point it leaves out. Numbers only
+     from the post or simple math on them. Leave G out only when the post gives nothing to
+     argue with or add to.
+   - **Humanize.** Run the humanizer process on every draft, G included: mark the tells,
+     rewrite, check that no fact or number was added or lost, search again for the tells that
+     survive most often. Keep only the final text.
+   - **Save.** Call `radar_save_drafts(post_id, drafts, general, note)`. `note` is one line
+     naming the angle and the data used, e.g. `Whale flip vs ETF week · xbrief BTC book`. If
+     the tool returns errors, rewrite the flagged drafts with humanizer and save again.
 4. End with one line per post: the author and either "drafted" or "skipped: <reason>".
