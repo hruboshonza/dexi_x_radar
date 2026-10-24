@@ -30,17 +30,18 @@ X API ──────►│ poller (every 5 min)  → SQLite: cursor, queue, 
    new original posts from `watchlist.txt`, mentions of `X_OWN_HANDLE`, and your own new
    replies. It uses `since_id`, so each post is read (and paid for) once.
 2. **Queue.** New posts go into the queue. Nothing is sent to your phone yet.
-3. **Draft.** Claude takes pending posts over MCP, adds data (for DexiScan: x-brief and
-   Whale Radar), writes 2-3 drafts per `PLAYBOOK.md` and saves them back. Only then
+3. **Draft.** Claude takes pending posts (inside the service through the API, or over MCP),
+   adds data (for DexiScan: x-brief and Whale Radar), writes drafts per `PLAYBOOK.md` and
+   saves them. Only then
    does the bot send one message, which pings: the author's post, with the drafts right
    under it. A post Claude skips (meme, off-topic) never reaches your phone.
 4. **You post.** **↩** opens X with the reply prefilled. **Copy** copies it.
    **Edit** takes your instruction and redrafts. **Skip** asks for a reason.
 5. **Learn.** The radar sees what you actually posted and how it did (see *Feedback*).
 
-## Two ways to draft
+## Ways to draft
 
-Both use the same MCP server; the difference is who calls it and when.
+A and B use the MCP server, a Claude session calls it. C needs no session: the service calls the Claude API itself.
 
 ### A. Local Claude with a subscription (default, phase 1)
 
@@ -73,11 +74,27 @@ Claude Code anywhere, and Claude apps once the server is added as a custom conne
 This is how you work with the radar from a phone or a second machine, and how the weekly
 playbook review happens.
 
-### Later: drafts inside the service
+### C. Drafts inside the service (Claude API)
 
-Set `ANTHROPIC_API_KEY` (and `DRAFT_MODEL`), and the service writes drafts itself, with
-no PC needed. This is billed per token through the Anthropic API, separately from any
-subscription.
+Set `ANTHROPIC_API_KEY` and the service drafts by itself, with no PC and no loop. About a
+minute after a post is queued (`DRAFT_CHECK_SECONDS`), `TRIAGE_MODEL` (Haiku) decides whether
+it is worth a reply. A post that is gets one call to `DRAFT_MODEL` (Opus 5.5 by default) with
+`PLAYBOOK.md`, the humanizer skill (`prompts/humanizer/`), the x-brief, Whale Radar for any
+wallet in the post, its images and your latest rewrites. The drafts go through the same
+`radar_save_drafts` checks as in A and B; a rejected draft is rewritten up to twice. An edit or
+a redraft you ask for in Telegram is picked up the same way, within a minute.
+
+- Billed per token through the Anthropic API, separately from any subscription.
+- `DRAFT_DAILY_BUDGET_USD` (default 5) stops drafting for the day; the bot tells you once.
+- Stop the local `/loop` while this runs, or both will draft the same posts.
+- `prompts/humanizer/` is a copy of the humanizer skill (MIT). Update it when the skill changes.
+
+### Quiet hours
+
+From `QUIET_HOURS` (default `22-6`, local time in `TIMEZONE`, default `Europe/Prague`) the
+service neither reads X nor drafts. The Telegram bot keeps answering. After the pause the
+watched accounts are read from 06:00 on, so posts from the night are never read or paid for;
+mentions and your own replies are read from where they stopped. `QUIET_HOURS=off` turns it off.
 
 ## What the radar remembers
 
@@ -160,7 +177,13 @@ cp .env.example .env     # then fill it in
 | `DB_PATH` | no (`data/radar.db`) | the SQLite file |
 | `PORT` | no (8080) | HTTP port (Railway sets it) |
 | `DEXISCAN_BASE_URL`, `X_BRIEF_KEY`, `API_READ_KEY` | no | DexiScan data for drafts (read-only keys) |
-| `ANTHROPIC_API_KEY`, `DRAFT_MODEL` | no | later: drafts inside the service |
+| `QUIET_HOURS`, `TIMEZONE` | no (`22-6`, `Europe/Prague`) | no polling and no drafting in these hours; `off` disables |
+| `ANTHROPIC_API_KEY` | no | drafts inside the service (mode C) |
+| `DRAFT_MODEL`, `TRIAGE_MODEL` | no (`claude-opus-5-5`, `claude-haiku-5-5`) | models for mode C |
+| `DRAFT_EFFORT` | no (`high`) | effort of the drafting call |
+| `DRAFT_DAILY_BUDGET_USD` | no (5) | mode C stops for the day at this spend |
+| `DRAFT_CHECK_SECONDS` | no (60) | how often mode C looks for pending posts |
+| `HUMANIZER_FILE` | no (`prompts/humanizer/SKILL.md`) | the humanizer skill mode C writes with |
 
 ### 4. Run it
 
@@ -226,7 +249,7 @@ that header (the server is stateless and does not need it). Fixes:
 | X API reads | $0.005 per post from the watchlist; owned reads $0.001. About $15-45/month for 20-30 accounts, depending on how much they post |
 | Telegram | free |
 | Drafts, mode A or B | included in your Claude subscription |
-| Drafts, inside the service | Anthropic API per token, a few dollars a month at this volume |
+| Drafts, inside the service | Anthropic API per token: about $0.20 a drafted post on Opus 5.5, half on Sonnet 5.5; capped by `DRAFT_DAILY_BUDGET_USD` |
 | Railway (optional) | one small container and a 1 GB volume |
 
 ## Safety
@@ -243,6 +266,7 @@ that header (the server is stateless and does not need it). Fixes:
 | Path | What |
 |---|---|
 | `PLAYBOOK.md` | reply rules, grown from your feedback |
+| `prompts/humanizer/` | copy of the humanizer skill for drafts inside the service |
 | `watchlist.txt` | accounts to watch |
 | `radar_poll.py` | phase-0 poller (one run, writes `inbox/`) |
 | `drafts/` | early rounds, kept as playbook evidence |

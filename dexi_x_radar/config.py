@@ -3,6 +3,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from .quiet import QuietHours
+
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -40,6 +42,19 @@ class Settings:
     playbook_file: Path
     ignore_after_hours: float = 6.0
     outcome_after_hours: float = 24.0
+    quiet_hours: str = "22-6"
+    timezone: str = "Europe/Prague"
+    # Drafts inside the service (Claude API); off while ANTHROPIC_API_KEY is empty.
+    anthropic_api_key: str = ""
+    draft_model: str = "claude-opus-5-5"
+    triage_model: str = "claude-haiku-5-5"
+    draft_effort: str = "high"
+    draft_daily_budget_usd: float = 5.0
+    draft_check_seconds: int = 60
+    humanizer_file: Path = ROOT / "prompts" / "humanizer" / "SKILL.md"
+
+    def quiet(self) -> QuietHours | None:
+        return QuietHours.parse(self.quiet_hours, self.timezone)
 
     def missing(self) -> list[str]:
         # TELEGRAM_CHAT_ID may be missing on the first start: the bot then answers /start with it.
@@ -88,4 +103,13 @@ def load_settings(env: dict | None = None) -> Settings:
         x_brief_key=get("X_BRIEF_KEY"),
         api_read_key=get("API_READ_KEY"),
         playbook_file=path("PLAYBOOK_FILE", "PLAYBOOK.md"),
+        quiet_hours=get("QUIET_HOURS", "22-6"),
+        timezone=get("TIMEZONE", "Europe/Prague"),
+        anthropic_api_key=get("ANTHROPIC_API_KEY"),
+        draft_model=get("DRAFT_MODEL", "claude-opus-5-5"),
+        triage_model=get("TRIAGE_MODEL", "claude-haiku-5-5"),
+        draft_effort=get("DRAFT_EFFORT", "high"),
+        draft_daily_budget_usd=float(get("DRAFT_DAILY_BUDGET_USD", "5")),
+        draft_check_seconds=int(get("DRAFT_CHECK_SECONDS", "60")),
+        humanizer_file=path("HUMANIZER_FILE", "prompts/humanizer/SKILL.md"),
     )

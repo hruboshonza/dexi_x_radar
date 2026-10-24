@@ -124,6 +124,9 @@ class Store:
             (name, value, now_iso()),
         )
 
+    def clear_cursors(self, prefix: str) -> int:
+        return self._x("DELETE FROM cursors WHERE name LIKE ?", (prefix + "%",))
+
     # ── users ──────────────────────────────────────────────────────────────────
     def user(self, handle: str) -> dict | None:
         rows = self._q("SELECT * FROM users WHERE handle = ?", (handle.lower(),))

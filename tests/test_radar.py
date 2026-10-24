@@ -1,5 +1,7 @@
 import asyncio
+import json
 import tempfile
+import types
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -456,6 +458,154 @@ class AuthTest(unittest.TestCase):
                         (await c.post("/mcp", json={})).status_code,
                         (await c.post("/mcp", json={}, headers={"Authorization": "Bearer wrong"})).status_code)
         self.assertEqual(asyncio.run(run()), (200, 401, 401))
+
+
+def prague(month: int, day: int, hour: int, minute: int = 0) -> datetime:
+    from zoneinfo import ZoneInfo
+    return datetime(2026, month, day, hour, minute, tzinfo=ZoneInfo("Europe/Prague"))
+
+
+class QuietHoursTest(unittest.TestCase):
+    def setUp(self):
+        from dexi_x_radar.quiet import QuietHours
+        self.q = QuietHours.parse("22-6", "Europe/Prague")
+
+    def test_night_is_quiet_in_summer_and_winter_time(self):
+        for month, day in [(7, 15), (12, 15)]:
+            self.assertTrue(self.q.active(prague(month, day, 22)))
+            self.assertTrue(self.q.active(prague(month, day, 5, 59)))
+            self.assertFalse(self.q.active(prague(month, day, 6)))
+            self.assertFalse(self.q.active(prague(month, day, 21, 59)))
+        self.assertTrue(self.q.active(datetime(2026, 7, 15, 20, 30, tzinfo=timezone.utc)), "22:30 CEST")
+        self.assertFalse(self.q.active(datetime(2026, 12, 15, 20, 30, tzinfo=timezone.utc)), "21:30 CET")
+
+    def test_end_and_time_left(self):
+        self.assertEqual(self.q.last_end(prague(10, 24, 9)), prague(10, 24, 6).astimezone(timezone.utc))
+        self.assertEqual(self.q.last_end(prague(10, 24, 3)), prague(10, 23, 6).astimezone(timezone.utc))
+        self.assertEqual(self.q.seconds_left(prague(10, 24, 5, 30)), 1800)
+        self.assertEqual(self.q.seconds_left(prague(10, 24, 23)), 7 * 3600)
+        self.assertEqual(self.q.seconds_left(prague(10, 24, 12)), 0)
+
+    def test_off(self):
+        from dexi_x_radar.quiet import QuietHours
+        self.assertIsNone(QuietHours.parse("off", "Europe/Prague"))
+        self.assertIsNone(load_settings({"QUIET_HOURS": "off"}).quiet())
+
+    def test_poller_skips_the_night_after_the_pause(self):
+        store = Store(":memory:")
+        for name in ("search:from:lookonchain", "mentions", "own"):
+            store.set_cursor(name, "123")
+        poller = Poller(load_settings({"DB_PATH": ":memory:"}), store, FakeX(), notifier=None)
+        poller.resume_after_quiet()
+        self.assertIsNone(store.cursor("search:from:lookonchain"), "the watch search restarts after the night")
+        self.assertEqual(store.cursor("mentions"), "123", "mentions from the night are still read")
+        self.assertEqual(store.cursor("own"), "123")
+        quiet_end = poller.quiet.last_end().strftime("%Y-%m-%dT%H:%M:%SZ")
+        self.assertGreaterEqual(poller.window_start(), quiet_end)
+
+
+class FakeAnthropic:
+    """Answers each create() with the next canned JSON and records the request."""
+
+    def __init__(self, *answers):
+        self.answers = list(answers)
+        self.calls = []
+        self.messages = self
+        self.beta = types.SimpleNamespace(messages=self)
+
+    async def create(self, **kwargs):
+        self.calls.append(kwargs)
+        answer = self.answers.pop(0)
+        usage = types.SimpleNamespace(input_tokens=1000, output_tokens=500, cache_creation_input_tokens=0,
+                                      cache_read_input_tokens=0)
+        content = [types.SimpleNamespace(type="thinking", thinking=""),
+                   types.SimpleNamespace(type="text", text=json.dumps(answer))]
+        return types.SimpleNamespace(content=content, stop_reason="end_turn", usage=usage, model=kwargs["model"])
+
+
+class FakeDexi:
+    def __init__(self):
+        self.markets = []
+
+    async def xbrief(self, market="crypto"):
+        self.markets.append(market)
+        return {"market": market, "cards": {"book": {"BTC": {"long": 13.9, "short": 13.4}}}}
+
+    async def whale_radar(self, address):
+        return {"address": address, "stats": {"win_rate": 0.125, "n": 8}}
+
+
+REPLY = {"reply": True, "market": "crypto", "reason": "whale claim"}
+DRAFTED = {"drafts": ["Hyperliquid whales flipped net long $BTC: $13.9M vs $13.4M short."],
+           "general": "A flip this small decides little; we'd watch whether it holds.",
+           "note": "Whale flip · xbrief BTC book", "skip_reason": ""}
+
+
+class DrafterTest(unittest.TestCase):
+    def setUp(self):
+        self.store = Store(":memory:")
+        self.store.insert_post(make_post("1", text="Whales are buying the dip", addresses=["0xabc"]))
+        self.settings = load_settings({"DB_PATH": ":memory:", "QUIET_HOURS": "off", "DRAFT_DAILY_BUDGET_USD": "5",
+                                       "DRAFT_MODEL": "claude-opus-5-5", "TRIAGE_MODEL": "claude-haiku-5-5"})
+        self.dexi = FakeDexi()
+        self.tools = RadarTools(self.settings, self.store, None, dexi=self.dexi)
+
+    def drafter(self, *answers):
+        from dexi_x_radar.drafter import Drafter
+        self.client = FakeAnthropic(*answers)
+        return Drafter(self.settings, self.store, self.tools, None, client=self.client)
+
+    def test_triage_then_draft_with_playbook_humanizer_and_data(self):
+        drafter = self.drafter(REPLY, DRAFTED)
+        done = asyncio.run(drafter.run_once())
+        self.assertEqual(done, {"1": "drafted"})
+        self.assertEqual([d["label"] for d in self.store.latest_drafts("1")], ["A", "G"])
+        triage, draft = self.client.calls
+        self.assertEqual(triage["model"], "claude-haiku-5-5")
+        self.assertNotIn("fallbacks", triage, "Haiku has no server-side fallback")
+        self.assertEqual(draft["model"], "claude-opus-5-5")
+        self.assertEqual(draft["fallbacks"], "default")
+        system = draft["system"][0]["text"]
+        self.assertIn("# Reply playbook", system)
+        self.assertIn("# Humanizer", system)
+        user = " ".join(b.get("text", "") for b in draft["messages"][0]["content"])
+        self.assertIn("13.9", user, "the x-brief goes with the post")
+        self.assertIn("0xabc", user, "Whale Radar for the wallet in the post")
+        # 2 calls x (1000 in, 500 out): Haiku $0.00035 + Opus $0.014
+        self.assertAlmostEqual(drafter.spent_today(), 0.01435, places=6)
+
+    def test_triage_skip_never_drafts(self):
+        done = asyncio.run(self.drafter({"reply": False, "market": "crypto", "reason": "meme"}).run_once())
+        self.assertEqual(done, {"1": "skipped"})
+        self.assertEqual(self.store.post("1")["skip_by"], "claude")
+        self.assertEqual(len(self.client.calls), 1)
+
+    def test_rejected_drafts_get_rewritten(self):
+        bad = {**DRAFTED, "general": "Rates matter, not the chart."}
+        done = asyncio.run(self.drafter(REPLY, bad, DRAFTED).run_once())
+        self.assertEqual(done, {"1": "drafted"})
+        retry = self.client.calls[2]["messages"]
+        self.assertEqual([m["role"] for m in retry], ["user", "assistant", "user"])
+        self.assertIn("not X but Y", retry[2]["content"])
+
+    def test_owner_redraft_is_not_triaged_away(self):
+        self.store.add_feedback("1", "regen")
+        done = asyncio.run(self.drafter({"reply": False, "market": "crypto", "reason": "meh"}, DRAFTED).run_once())
+        self.assertEqual(done, {"1": "drafted"})
+        self.assertIn("different angle", self.client.calls[1]["messages"][0]["content"][-1]["text"])
+
+    def test_budget_stops_drafting(self):
+        drafter = self.drafter(REPLY, DRAFTED)
+        self.store.set_cursor(f"anthropic_usd:{drafter._day()}", "5.01")
+        self.assertEqual(asyncio.run(drafter.run_once()), {})
+        self.assertEqual(self.client.calls, [])
+        self.assertEqual(self.store.post("1")["status"], "pending")
+
+    def test_quiet_hours_stop_drafting(self):
+        drafter = self.drafter(REPLY, DRAFTED)
+        drafter.quiet = types.SimpleNamespace(active=lambda: True)
+        self.assertEqual(asyncio.run(drafter.run_once()), {})
+        self.assertEqual(self.client.calls, [])
 
 
 if __name__ == "__main__":
