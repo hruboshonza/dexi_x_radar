@@ -337,21 +337,36 @@ class ToolsTest(unittest.TestCase):
         self.assertEqual(len(r["errors"]), 3)
         self.assertEqual(self.store.post("1")["status"], "pending")
 
-    def test_saves_and_warns_on_missing_punctuation(self):
+    def test_saves_clean_drafts(self):
         r = self.save(["Funding cost him $1.59M.", "Size tells you conviction"])
         self.assertTrue(r["ok"])
-        self.assertIn("B: last sentence has no closing punctuation", r["warnings"])
+        self.assertEqual(r["warnings"], [])
         self.assertEqual(self.store.post("1")["status"], "drafted")
+        self.assertEqual([d["label"] for d in self.store.latest_drafts("1")], ["A", "B"])
 
-    def test_general_reply_is_saved_as_g_and_validated(self):
-        bad = asyncio.run(self.tools.save_drafts("1", ["Funding cost him $1.59M."], "n", general="Macro — risk."))
-        self.assertFalse(bad["ok"])
-        self.assertIn("G: contains an em or en dash", bad["errors"])
-        ok = asyncio.run(self.tools.save_drafts("1", ["Funding cost him $1.59M."], "n",
-                                                general="At 14x, a 7% move ends it. Size is the real risk here."))
-        self.assertTrue(ok["ok"])
-        self.assertEqual([d["label"] for d in self.store.latest_drafts("1")], ["A", "G"])
-        text, kb = render(self.store.post("1"), self.store.latest_drafts("1"))
+    def test_rejects_humanizer_tells(self):
+        r = self.save(["We'd expect grind, not fireworks.",
+                       "It's not just leverage. Let that sink in.",
+                       "Great question! This is a pivotal moment."])
+        self.assertFalse(r["ok"])
+        joined = " ".join(r["errors"])
+        self.assertIn('A: \'not X but Y\' contrast (humanizer §1): ", not fireworks."', r["errors"])
+        self.assertIn("B: staged line", joined)
+        self.assertIn("C: stock AI word", joined)
+        self.assertIn("C: chatbot residue", joined)
+        self.assertEqual(self.store.post("1")["status"], "pending")
+
+    def test_plain_contrast_with_information_passes(self):
+        r = self.save(["Low open interest means less forced selling on the next dip, but also less fuel "
+                       "for a squeeze up.",
+                       "We'd cut size before the events rather than widen stops after.",
+                       "Not for everyone. Whales stayed net short and are up $1.26M."])
+        self.assertTrue(r["ok"], r.get("errors"))
+
+    def test_older_general_drafts_still_render(self):
+        drafts = [{"label": "A", "text": "Funding cost him $1.59M.", "round": 1},
+                  {"label": "G", "text": "At 14x, a 7% move ends it.", "round": 1}]
+        text, kb = render({**make_post("1"), "status": "drafted"}, drafts)
         self.assertIn("🌐 G", text)
         self.assertEqual([b["text"] for b in kb["inline_keyboard"][0]], ["↩ A", "↩ G"])
 
@@ -361,10 +376,6 @@ class ToolsTest(unittest.TestCase):
         self.assertIn(warn, " ".join(mostly_i["warnings"]))
         mostly_we = self.save(["We'd stay out of this one.", "Our data says funding decides it."])
         self.assertNotIn(warn, " ".join(mostly_we["warnings"]))
-
-    def test_missing_general_reply_is_a_warning(self):
-        r = self.save(["Funding cost him $1.59M."])
-        self.assertIn("no general reply (G)", " ".join(r["warnings"]))
 
     def test_pending_carries_owner_instructions(self):
         self.store.add_feedback("1", "edit", "kratší")
@@ -379,6 +390,18 @@ class ToolsTest(unittest.TestCase):
         self.assertEqual(example["our_drafts"], {"A": "Whales are adding, not booking."})
         self.assertEqual(example["owner_ideal"], "Our whales are adding into Friday. We'd stay long.")
         self.assertEqual(len(self.tools.feedback_summary()["ideal_rewrites"]), 1)
+
+    def test_edited_posted_replies_reach_the_drafting_session(self):
+        self.store.insert_post(make_post("3"))
+        self.store.save_drafts("3", ["Hyperliquid whales stayed net short and are up $1.26M on it."])
+        for rid, matched, text in [("r1", "A~", "@AshCrypto Wallets we're tracking remain net short and are up $1.26M."),
+                                   ("r2", "A", "@AshCrypto Hyperliquid whales stayed net short and are up $1.26M on it.")]:
+            self.store.insert_reply({"id": rid, "post_id": "3", "text": text, "created_at": iso(1), "matched": matched})
+        examples = self.tools.pending()["owner_examples"]
+        self.assertEqual([e.get("owner_posted") for e in examples],
+                         ["Wallets we're tracking remain net short and are up $1.26M."],
+                         "a draft posted unchanged is not the owner's writing")
+        self.assertEqual(examples[0]["our_drafts"], {"A": "Hyperliquid whales stayed net short and are up $1.26M on it."})
 
 
 class LoggingTest(unittest.TestCase):

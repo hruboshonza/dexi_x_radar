@@ -87,6 +87,7 @@ def render(post: dict, drafts: list[dict], reply: dict | None = None) -> tuple[s
     status = post["status"]
     if drafts and status in ("drafted", "sent"):
         for d in drafts:
+            # G: the general reply that rounds before 2026-10-24 carried.
             label = "🌐 G" if d["label"] == "G" else d["label"]
             lines.append(f"<b>{label}</b>  {e(d['text'])}")
         if post.get("note"):

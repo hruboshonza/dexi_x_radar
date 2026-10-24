@@ -111,7 +111,7 @@ latest posts every cycle (cheap "owned reads"):
 
 | Signal | Source | Tells us |
 |---|---|---|
-| Which draft, what you changed | your posted reply vs the drafts | voice and format rules |
+| Which draft, what you changed | your posted reply vs the drafts | voice, by example: replies you edited go with every `radar_pending` |
 | Skip + reason (off-topic / weak data / tone / too late) | Telegram button | triage and watchlist |
 | Edit instructions ("shorter", "add a takeaway") | Telegram reply | recurring fixes |
 | Ideal wording (💡: how the reply should have sounded, posted or not) | Telegram reply | voice, by example: the latest ones go with every `radar_pending` |

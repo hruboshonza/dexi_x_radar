@@ -12,6 +12,7 @@ from starlette.responses import JSONResponse, PlainTextResponse
 
 from .config import Settings
 from .dexiscan import DexiScan
+from .matching import strip_mentions
 from .store import Store, now_iso, parse_iso
 from .telegram import Notifier
 
@@ -21,19 +22,34 @@ _DASHES = ("—", "–")
 # "77 Hyperliquid whales we track", "214 wallets we track": the owner never states the cohort size.
 _COHORT_SIZE = re.compile(r"\b\d{2,4}\s+(?:tracked\s+)?(?:hyperliquid\s+)?(?:whales|wallets)\s+(?:that\s+)?we\s+track",
                           re.IGNORECASE)
-_END_PUNCT = tuple(".!?)")
+# The strongest tells from the humanizer skill; a draft with one never reaches the phone.
+_HUMANIZER_TELLS = (
+    ("'not X but Y' contrast (humanizer §1)", re.compile(
+        r"\bnot (?:just|only|merely)\b"
+        r"|\b(?:it|this|that)(?:'s| is) not\b[^.!?]*,\s*(?:it|this|that)(?:'s| is)\b"
+        r"|,\s+not\s+[^,.;:!?]{1,40}[.!?]", re.IGNORECASE)),
+    ("staged line (humanizer §2-4)", re.compile(
+        r"\b(?:let that sink in|read that again|here's the thing|the real question|at its core"
+        r"|make no mistake|what (?:really )?matters)\b", re.IGNORECASE)),
+    ("stock AI word (humanizer §12)", re.compile(
+        r"\b(?:delve\w*|crucial|pivotal|testament|tapestry|vibrant|showcas\w*|underscor\w*)\b", re.IGNORECASE)),
+    ("chatbot residue (humanizer §22)", re.compile(
+        r"\b(?:great question|hope this helps|let me know)\b", re.IGNORECASE)),
+)
 # The owner writes as "we" (DexiScan); "I" is the occasional exception.
 _SINGULAR = re.compile(r"\b(?:I|I'm|I'd|I've|I'll|my|me)\b")
 _PLURAL = re.compile(r"\b(?:we|we're|we'd|we've|we'll|our|us)\b", re.IGNORECASE)
 
 INSTRUCTIONS = """Reply radar for the @DexiScan X account. Posts arrive in a queue; you write reply
 drafts, the owner posts them by hand. Workflow: radar_pending -> for each post either radar_skip
-(off-topic) or fetch data (dexiscan_xbrief, dexiscan_whale_radar for full wallet addresses) and
-radar_save_drafts (data drafts A-C plus one general macro/quant reply G). `owner_examples` in
-radar_pending are the owner's own rewrites of earlier drafts: write like them. Follow radar_playbook,
-the rudejohn-x-voice skill, and the quant-trader skill for G. Use only numbers from the post or
-from the DexiScan tools. Write as "we" (DexiScan), "I" only occasionally. Never state the total
-number of tracked wallets."""
+(our data adds nothing) or fetch data (dexiscan_xbrief, dexiscan_whale_radar for full wallet
+addresses) and radar_save_drafts (1-3 drafts, each built on DexiScan data). The humanizer skill
+decides how drafts are written: write them, run its process, save only the final text.
+`owner_examples` in radar_pending are the owner's own writing next to our drafts (owner_ideal: a 💡
+rewrite; owner_posted: what the owner actually posted after changing them): humanizer's writing sample.
+radar_playbook says what a reply must carry: a number the thread doesn't have, readable in one
+pass. Use only numbers from the post or from the DexiScan tools. Write as "we" (DexiScan). Never
+state the total number of tracked wallets."""
 
 
 class RadarTools:
@@ -64,6 +80,27 @@ class RadarTools:
                         "owner_ideal": f["value"], "at": f["created_at"]})
         return out
 
+    def posted_rewrites(self, limit: int | None = None) -> list[dict]:
+        """Replies the owner posted after changing our drafts (edited, merged or own), newest first."""
+        out = []
+        for r in self.store.replies():
+            matched = r["matched"]
+            if not (matched.endswith("~") or matched.startswith("merged") or matched == "own"):
+                continue
+            drafts = self.store.latest_drafts(r["post_id"])
+            if not drafts:
+                continue
+            post = self.store.post(r["post_id"]) or {}
+            out.append({"post_id": r["post_id"], "author": post.get("author"), "post": (post.get("text") or "")[:500],
+                        "our_drafts": {d["label"]: d["text"] for d in drafts},
+                        "owner_posted": strip_mentions(r["text"]), "matched": matched, "at": r["created_at"]})
+        return out[:limit]
+
+    def owner_examples(self, limit: int = OWNER_EXAMPLES) -> list[dict]:
+        """Humanizer's writing sample: the owner's 💡 rewrites and edited posted replies, newest first."""
+        examples = self.ideal_rewrites(limit=limit) + self.posted_rewrites(limit=limit)
+        return sorted(examples, key=lambda e: e["at"], reverse=True)[:limit]
+
     def pending(self, limit: int = 5) -> dict:
         posts = self.store.posts(status="pending", limit=limit)
         out = []
@@ -75,36 +112,34 @@ class RadarTools:
             view["previous_drafts"] = self.store.all_drafts(p["id"])
             out.append(view)
         return {"pending": out, "count": len(out),
-                "owner_examples": self.ideal_rewrites(limit=OWNER_EXAMPLES) if out else []}
+                "owner_examples": self.owner_examples() if out else []}
 
-    async def save_drafts(self, post_id: str, drafts: list[str], note: str = "", general: str = "") -> dict:
+    async def save_drafts(self, post_id: str, drafts: list[str], note: str = "") -> dict:
         post = self.store.post(post_id)
         if not post:
             return {"ok": False, "error": f"unknown post {post_id}"}
         texts = [d.strip() for d in drafts if d and d.strip()]
-        general = (general or "").strip()
         if not 1 <= len(texts) <= 3:
             return {"ok": False, "error": "send 1 to 3 drafts, the full reply first"}
         errors, warnings = [], []
-        for label, text in list(zip("ABC", texts)) + ([("G", general)] if general else []):
+        for label, text in zip("ABC", texts):
             if any(ch in text for ch in _DASHES):
                 errors.append(f"{label}: contains an em or en dash")
             if len(text) > MAX_DRAFT:
                 errors.append(f"{label}: {len(text)} chars, max {MAX_DRAFT}")
             if _COHORT_SIZE.search(text):
                 errors.append(f"{label}: states the total number of tracked wallets")
-            if not text.rstrip().endswith(_END_PUNCT):
-                warnings.append(f"{label}: last sentence has no closing punctuation")
-        if not general:
-            warnings.append("no general reply (G): add one unless the post gives nothing to say beyond our data")
-        all_texts = texts + ([general] if general else [])
-        singular = sum(1 for t in all_texts if _SINGULAR.search(t))
-        plural = sum(1 for t in all_texts if _PLURAL.search(t))
+            plain = text.replace("’", "'")
+            for name, pattern in _HUMANIZER_TELLS:
+                if m := pattern.search(plain):
+                    errors.append(f'{label}: {name}: "{m.group(0).strip()}"')
+        singular = sum(1 for t in texts if _SINGULAR.search(t))
+        plural = sum(1 for t in texts if _PLURAL.search(t))
         if singular > plural:
             warnings.append("more drafts in 'I' than in 'we': the owner prefers 'we' (DexiScan)")
         if errors:
             return {"ok": False, "errors": errors}
-        rnd = self.store.save_drafts(post_id, texts, general or None)
+        rnd = self.store.save_drafts(post_id, texts)
         self.store.set_status(post_id, "drafted", note=note or None, skip_by=None, skip_reason=None)
         if self.notifier:
             await self.notifier.show(post_id, ping=True)
@@ -181,18 +216,19 @@ def build_mcp(tools: RadarTools, path: str = "/mcp") -> FastMCP:
     @mcp.tool()
     def radar_pending(limit: int = 5) -> dict:
         """Posts waiting for drafts, newest first, with owner instructions and earlier drafts.
-        `owner_examples`: the owner's latest rewrites of our drafts (how a reply should sound)."""
+        `owner_examples`: the owner's latest 💡 rewrites and edited posted replies next to our drafts
+        (how a reply should sound; the humanizer writing sample)."""
         return tools.pending(limit)
 
     @mcp.tool()
-    async def radar_save_drafts(post_id: str, drafts: list[str], general: str = "", note: str = "") -> dict:
+    async def radar_save_drafts(post_id: str, drafts: list[str], note: str = "") -> dict:
         """Save the drafts and push them to the owner's phone as one message under the post.
-        `drafts`: 1-3 data replies (A, B, C), the full reply first, built on the post and DexiScan data.
-        `general`: one general reply (G) with no DexiScan data: a sharp macro or quant observation
-        (regime, funding/basis, crowding, volatility, liquidity, risk and sizing, base rates) plus a takeaway.
-        `note`: reply type and the data used, e.g. "Report card · Whale Radar 0x020c…".
-        Rejected: em/en dashes, over 280 chars, stating the total number of tracked wallets."""
-        return await tools.save_drafts(post_id, drafts, note, general)
+        `drafts`: 1-3 replies (A, B, C), the full reply first, each built on DexiScan data and
+        passed through the humanizer skill (final text only).
+        `note`: the angle and the data used, e.g. "Whale flip vs ETF week · xbrief BTC book".
+        Rejected: em/en dashes, over 280 chars, stating the total number of tracked wallets,
+        the strongest humanizer tells (not X but Y, staged lines, stock AI words, chatbot residue)."""
+        return await tools.save_drafts(post_id, drafts, note)
 
     @mcp.tool()
     async def radar_skip(post_id: str, reason: str) -> dict:
