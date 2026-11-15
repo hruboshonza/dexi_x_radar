@@ -35,6 +35,19 @@ _HUMANIZER_TELLS = (
         r"\b(?:delve\w*|crucial|pivotal|testament|tapestry|vibrant|showcas\w*|underscor\w*)\b", re.IGNORECASE)),
     ("chatbot residue (humanizer §22)", re.compile(
         r"\b(?:great question|hope this helps|let me know)\b", re.IGNORECASE)),
+    # Owner 2026-11-10 (PLAYBOOK, "Forms we never use"): the forms every model kept writing.
+    ("dramatized turn (playbook forms §3, §6)", re.compile(
+        r"\b(?:went the other way|the other side of the tape|not (?:a single one|one of them)"
+        r"|nobody's picking|barely moved|underneath|under it)\b", re.IGNORECASE)),
+    ("label then reveal (playbook forms §4)", re.compile(
+        r"(?m)^\s*(?:(?:biggest move|detail|bottom line|takeaway|next)\s*[:,]|main driver (?:was|of the day)\b)",
+        re.IGNORECASE)),
+    ("mirrored pair (playbook forms §2)", re.compile(
+        r"\bon one\b[^.!?\n]*\bon (?:another|the other)\b"
+        r"|\beither (?:they're|we're|it's|they are)\b[^.!?\n]*\bor\b", re.IGNORECASE)),
+    ("closing forecast (playbook forms §5)", re.compile(
+        r"\bwe'll see (?:if|whether|who|how)\b|\bturns? into exit liquidity\b|\bthe next fuel\b",
+        re.IGNORECASE)),
 )
 # The owner writes as "we" (DexiScan); "I" is the occasional exception.
 _SINGULAR = re.compile(r"\b(?:I|I'm|I'd|I've|I'll|my|me)\b")
@@ -234,7 +247,8 @@ def build_mcp(tools: RadarTools, path: str = "/mcp") -> FastMCP:
         Every text goes through the humanizer skill first (final text only).
         `note`: the angle and the data used, e.g. "Whale flip vs ETF week · xbrief BTC book".
         Rejected: em/en dashes, over 280 chars, stating the total number of tracked wallets,
-        the strongest humanizer tells (not X but Y, staged lines, stock AI words, chatbot residue)."""
+        the strongest humanizer tells (not X but Y, staged lines, stock AI words, chatbot residue) and
+        the playbook's banned forms (dramatized turns, label then reveal, mirrored pairs, closing forecasts)."""
         return await tools.save_drafts(post_id, drafts, note, general)
 
     @mcp.tool()

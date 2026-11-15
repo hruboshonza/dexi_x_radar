@@ -375,6 +375,23 @@ class ToolsTest(unittest.TestCase):
         self.assertIn("C: chatbot residue", joined)
         self.assertEqual(self.store.post("1")["status"], "pending")
 
+    def test_rejects_playbook_forms(self):
+        r = self.save(["$SOXL went the other way, 10 bearish vs 3 bullish.",
+                       "Biggest move: 10 wallets bullish on $NVDA.",
+                       "Profit-taking on one chip ticker, dip-buying on another. We'll see if they hold."])
+        self.assertFalse(r["ok"])
+        joined = " ".join(r["errors"])
+        self.assertIn("A: dramatized turn", joined)
+        self.assertIn("B: label then reveal", joined)
+        self.assertIn("C: mirrored pair", joined)
+        self.assertIn("C: closing forecast", joined)
+
+    def test_plain_facts_without_forms_pass(self):
+        r = self.save(["10 wallets cut $SOXL longs after a +23% day, 8 of them in profit, $241k realized.",
+                       "$NVDA: 10 wallets bullish vs 2, $934k in, 8 fresh longs.",
+                       "We'll check those 8 $NVDA longs again tomorrow."])
+        self.assertTrue(r["ok"], r.get("errors"))
+
     def test_plain_contrast_with_information_passes(self):
         r = self.save(["Low open interest means less forced selling on the next dip, but also less fuel "
                        "for a squeeze up.",
