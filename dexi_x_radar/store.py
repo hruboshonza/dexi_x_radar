@@ -208,12 +208,15 @@ class Store:
         return ids
 
     # ── drafts ─────────────────────────────────────────────────────────────────
-    def save_drafts(self, post_id: str, texts: list[str], general: str | None = None) -> int:
-        """Data drafts are A, B, C; the general reply (no DexiScan data) is G."""
+    def save_drafts(self, post_id: str, texts: list[str], general: str | None = None,
+                    insight: str | None = None) -> int:
+        """A is the data reply, B the short human one (older rounds also have C), N the insight
+        reply (a fact from the web or a mechanism), G the general reply (no DexiScan data)."""
         rows = self._q("SELECT COALESCE(MAX(round), 0) AS r FROM drafts WHERE post_id = ?", (post_id,))
         rnd = rows[0]["r"] + 1
         stamp = now_iso()
-        items = list(zip("ABC", texts)) + ([("G", general)] if general else [])
+        items = (list(zip("ABC", texts)) + ([("N", insight)] if insight else [])
+                 + ([("G", general)] if general else []))
         with self._lock:
             for label, text in items:
                 self._db.execute(
@@ -225,14 +228,14 @@ class Store:
     def latest_drafts(self, post_id: str) -> list[dict]:
         rows = self._q(
             "SELECT label, text, round FROM drafts WHERE post_id = ? "
-            "AND round = (SELECT MAX(round) FROM drafts WHERE post_id = ?) ORDER BY label",
+            "AND round = (SELECT MAX(round) FROM drafts WHERE post_id = ?)",
             (post_id, post_id),
         )
-        return [dict(r) for r in rows]
+        return sorted((dict(r) for r in rows), key=_label_order)
 
     def all_drafts(self, post_id: str) -> list[dict]:
-        rows = self._q("SELECT label, text, round FROM drafts WHERE post_id = ? ORDER BY round, label", (post_id,))
-        return [dict(r) for r in rows]
+        rows = self._q("SELECT label, text, round FROM drafts WHERE post_id = ?", (post_id,))
+        return sorted((dict(r) for r in rows), key=lambda d: (d["round"], _label_order(d)))
 
     # ── replies ────────────────────────────────────────────────────────────────
     def insert_reply(self, reply: dict) -> bool:
@@ -243,13 +246,15 @@ class Store:
              reply.get("similarity"), json.dumps(reply.get("diff"), ensure_ascii=False)),
         ) == 1
 
-    def replies(self, post_id: str | None = None, since: str | None = None) -> list[dict]:
+    def replies(self, post_id: str | None = None, since: str | None = None,
+                limit: int | None = 100) -> list[dict]:
+        """By post or since a time (oldest first); otherwise the newest `limit` (None: all)."""
         if post_id:
             rows = self._q("SELECT * FROM replies WHERE post_id = ? ORDER BY created_at", (post_id,))
         elif since:
             rows = self._q("SELECT * FROM replies WHERE created_at >= ? ORDER BY created_at", (since,))
         else:
-            rows = self._q("SELECT * FROM replies ORDER BY created_at DESC LIMIT 100")
+            rows = self._q("SELECT * FROM replies ORDER BY created_at DESC LIMIT ?", (-1 if limit is None else limit,))
         return [_reply_dict(r) for r in rows]
 
     def replies_due_for_outcome(self, older_than_hours: float) -> list[dict]:
@@ -285,6 +290,14 @@ class Store:
             "SELECT status, COUNT(*) AS n FROM posts WHERE fetched_at >= ? GROUP BY status", (since or "",)
         )
         return {r["status"]: r["n"] for r in rows}
+
+
+LABEL_ORDER = "ABCNG"
+
+
+def _label_order(draft: dict) -> int:
+    label = draft["label"]
+    return LABEL_ORDER.index(label) if label in LABEL_ORDER else len(LABEL_ORDER)
 
 
 def _post_dict(row: sqlite3.Row) -> dict:

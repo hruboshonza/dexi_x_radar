@@ -49,8 +49,22 @@ class TelegramClient:
         return data.get("result", {})
 
 
+LATE_AFTER_MINUTES = 60
+LABELS = {"G": "🌐 G", "N": "🔎 N"}
+
+
+def _minutes(created_at: str) -> int:
+    return int((datetime.now(timezone.utc) - parse_iso(created_at)).total_seconds() // 60)
+
+
+def is_late(post: dict, late_after: int = LATE_AFTER_MINUTES) -> bool:
+    """A reply posted this long after the post gets a fraction of the reach (owner's replies,
+    Oct-Nov 2026: median 51 impressions within 30 min, 9 at 30-90 min, 3 later)."""
+    return _minutes(post["created_at"]) >= late_after
+
+
 def _age(created_at: str) -> str:
-    minutes = int((datetime.now(timezone.utc) - parse_iso(created_at)).total_seconds() // 60)
+    minutes = _minutes(created_at)
     if minutes < 60:
         return f"{minutes} min"
     if minutes < 48 * 60:
@@ -72,11 +86,14 @@ def intent_url(post_id: str, text: str) -> str:
     return f"https://x.com/intent/tweet?in_reply_to={post_id}&text={quote(text, safe='')}"
 
 
-def render(post: dict, drafts: list[dict], reply: dict | None = None) -> tuple[str, dict | None]:
+def render(post: dict, drafts: list[dict], reply: dict | None = None,
+           late_after: int = LATE_AFTER_MINUTES) -> tuple[str, dict | None]:
     """Message text (HTML) and inline keyboard for the post's current state."""
     e = html.escape
     kind = "💬 zmínka" if post["source"] == "mention" else "🔔"
-    head = f"{kind} <b>@{e(post['author'])}</b>{_followers(post.get('author_followers'))} · {_age(post['created_at'])}"
+    late = " · ⏰ <b>pozdě</b>" if post["status"] == "drafted" and is_late(post, late_after) else ""
+    head = (f"{kind} <b>@{e(post['author'])}</b>{_followers(post.get('author_followers'))} · "
+            f"{_age(post['created_at'])}{late}")
     media = f" · {len(post['media'])} média" if post.get("media") else ""
     lines = [head + media]
 
@@ -87,7 +104,7 @@ def render(post: dict, drafts: list[dict], reply: dict | None = None) -> tuple[s
     status = post["status"]
     if drafts and status in ("drafted", "sent"):
         for d in drafts:
-            label = "🌐 G" if d["label"] == "G" else d["label"]
+            label = LABELS.get(d["label"], d["label"])
             lines.append(f"<b>{label}</b>  {e(d['text'])}")
         if post.get("note"):
             lines.append(f"<i>{e(post['note'])}</i>")
@@ -147,10 +164,11 @@ class Notifier:
     replaces the message with a fresh one (after the owner asked for a redraft).
     """
 
-    def __init__(self, store: Store, tg: TelegramClient, chat_id: str):
+    def __init__(self, store: Store, tg: TelegramClient, chat_id: str, late_after: int = LATE_AFTER_MINUTES):
         self.store = store
         self.tg = tg
         self.chat_id = chat_id
+        self.late_after = late_after
 
     async def drop(self, post_id: str) -> None:
         """Remove the post's message, if it has one (a skipped or stale post leaves no trace)."""
@@ -171,7 +189,7 @@ class Notifier:
             return
         drafts = self.store.latest_drafts(post_id)
         replies = self.store.replies(post_id=post_id)
-        text, keyboard = render(post, drafts, replies[-1] if replies else None)
+        text, keyboard = render(post, drafts, replies[-1] if replies else None, self.late_after)
         common = {"text": text, "parse_mode": "HTML", "reply_markup": keyboard,
                   "link_preview_options": {"is_disabled": True}}
         old = post.get("tg_message_id")
@@ -183,7 +201,9 @@ class Notifier:
                 await self.tg.call("deleteMessage", chat_id=self.chat_id, message_id=old)
             except Exception:
                 log.warning("could not delete message %s", old)
-        sent = await self.tg.call("sendMessage", chat_id=self.chat_id, disable_notification=not ping, **common)
+        # A late post still arrives, without a sound: the reply would get little reach anyway.
+        silent = not ping or is_late(post, self.late_after)
+        sent = await self.tg.call("sendMessage", chat_id=self.chat_id, disable_notification=silent, **common)
         self.store.set_message_id(post_id, sent["message_id"])
 
     async def say(self, text: str, **extra) -> dict:

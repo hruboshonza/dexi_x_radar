@@ -18,7 +18,7 @@ from .xapi import XClient
 def build(settings: Settings, http: httpx.AsyncClient):
     store = Store(settings.db_path)
     tg = TelegramClient(settings.telegram_bot_token, http)
-    notifier = Notifier(store, tg, settings.telegram_chat_id)
+    notifier = Notifier(store, tg, settings.telegram_chat_id, settings.late_after_minutes)
     x = XClient(settings.x_bearer_token, http)
     dexi = DexiScan(settings.dexiscan_base_url, settings.x_brief_key, settings.api_read_key, http)
     tools = RadarTools(settings, store, notifier, dexi)

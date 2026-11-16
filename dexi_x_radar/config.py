@@ -52,6 +52,12 @@ class Settings:
     draft_daily_budget_usd: float = 5.0
     draft_check_seconds: int = 60
     humanizer_file: Path = ROOT / "prompts" / "humanizer" / "SKILL.md"
+    voice_file: Path = ROOT / "prompts" / "voice" / "SKILL.md"
+    # The insight reply (N): a cheaper model searches the web for one fact worth adding. "off" disables.
+    note_model: str = "claude-sonnet-5-5"
+    note_searches: int = 2
+    # A post older than this reaches the phone without a sound and marked late (replies lose reach fast).
+    late_after_minutes: int = 60
 
     def quiet(self) -> QuietHours | None:
         return QuietHours.parse(self.quiet_hours, self.timezone)
@@ -112,4 +118,8 @@ def load_settings(env: dict | None = None) -> Settings:
         draft_daily_budget_usd=float(get("DRAFT_DAILY_BUDGET_USD", "5")),
         draft_check_seconds=int(get("DRAFT_CHECK_SECONDS", "60")),
         humanizer_file=path("HUMANIZER_FILE", "prompts/humanizer/SKILL.md"),
+        voice_file=path("VOICE_FILE", "prompts/voice/SKILL.md"),
+        note_model=get("NOTE_MODEL", "claude-sonnet-5-5"),
+        note_searches=int(get("NOTE_SEARCHES", "2")),
+        late_after_minutes=int(get("LATE_AFTER_MINUTES", "60")),
     )

@@ -1,4 +1,4 @@
-"""python -m dexi_x_radar serve | poll-once | chat-id | status | bridge"""
+"""python -m dexi_x_radar serve | poll-once | chat-id | status | bridge | sync-voice"""
 import asyncio
 import json
 import logging
@@ -54,6 +54,9 @@ def main() -> None:
         asyncio.run(_poll_once(settings))
     elif command == "chat-id":
         asyncio.run(_chat_id(settings))
+    elif command == "sync-voice":
+        from .voice import sync
+        print(sync(settings.voice_file))
     elif command == "status":
         print(json.dumps(Store(settings.db_path).status_counts(), indent=2))
     else:

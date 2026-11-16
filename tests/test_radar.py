@@ -233,6 +233,17 @@ class DeliveryTest(unittest.TestCase):
                         "the author's post comes first, the drafts right under it")
         self.assertEqual(store.post("1")["tg_message_id"], 77)
 
+    def test_a_late_post_arrives_silently_and_marked(self):
+        store = Store(":memory:")
+        store.insert_post(make_post("1", minutes_ago=75))
+        store.save_drafts("1", ["Funding cost him $1.59M."])
+        store.set_status("1", "drafted")
+        notifier, tg = self.notifier(store)
+        asyncio.run(notifier.show("1", ping=True))
+        payload = tg.calls[-1][1]
+        self.assertTrue(payload["disable_notification"])
+        self.assertIn("pozdě", payload["text"])
+
     def test_a_skipped_post_leaves_no_message(self):
         store = Store(":memory:")
         store.insert_post(make_post("1"))
@@ -330,72 +341,101 @@ class ToolsTest(unittest.TestCase):
         self.store.insert_post(make_post("1"))
         self.tools = RadarTools(load_settings({"DB_PATH": ":memory:"}), self.store, None, dexi=None)
 
-    def save(self, drafts):
-        return asyncio.run(self.tools.save_drafts("1", drafts, "note"))
+    def save(self, drafts, general="", insight=""):
+        return asyncio.run(self.tools.save_drafts("1", drafts, "note", general, insight))
 
     def test_rejects_dashes_length_and_cohort_size(self):
-        r = self.save(["Whales — short.", "x" * 281, "The 77 Hyperliquid whales we track went short."])
+        r = self.save(["Whales — short.", "x" * 281], general="The 77 Hyperliquid whales we track went short.")
         self.assertFalse(r["ok"])
         self.assertEqual(len(r["errors"]), 3)
         self.assertEqual(self.store.post("1")["status"], "pending")
 
-    def test_saves_clean_drafts(self):
-        r = asyncio.run(self.tools.save_drafts("1", ["Funding cost him $1.59M.", "Size tells you conviction"], "n",
-                                               general="At 14x, a 7% move ends it."))
-        self.assertTrue(r["ok"])
-        self.assertEqual(r["warnings"], [])
-        self.assertEqual(self.store.post("1")["status"], "drafted")
-        self.assertEqual([d["label"] for d in self.store.latest_drafts("1")], ["A", "B", "G"])
+    def test_one_or_two_drafts(self):
+        r = self.save(["Funding cost him $1.59M.", "Size tells you conviction", "A third one."])
+        self.assertFalse(r["ok"])
+        self.assertIn("1 or 2 drafts", r["error"])
 
-    def test_general_reply_is_validated_and_rendered(self):
-        bad = asyncio.run(self.tools.save_drafts("1", ["Funding cost him $1.59M."], "n",
-                                                 general="Rates matter, not the chart."))
+    def test_saves_clean_drafts_in_order(self):
+        r = self.save(["Funding cost him $1.59M.", "Size tells you conviction :)"],
+                      general="At 14x, a 7% move ends it.",
+                      insight="Strategy pays for its buys by selling stock, so the bid lasts while MSTR trades at a premium.")
+        self.assertTrue(r["ok"])
+        self.assertEqual(self.store.post("1")["status"], "drafted")
+        self.assertEqual([d["label"] for d in self.store.latest_drafts("1")], ["A", "B", "N", "G"])
+        text, kb = render(self.store.post("1"), self.store.latest_drafts("1"))
+        self.assertIn("🔎 N", text)
+        self.assertIn("🌐 G", text)
+        self.assertEqual([b["text"] for b in kb["inline_keyboard"][0]], ["↩ A", "↩ B", "↩ N", "↩ G"])
+
+    def test_general_reply_is_validated(self):
+        bad = self.save(["Funding cost him $1.59M."], general="Rates matter, not the chart.")
         self.assertFalse(bad["ok"])
         self.assertIn("G: 'not X but Y' contrast", " ".join(bad["errors"]))
-        ok = asyncio.run(self.tools.save_drafts("1", ["Funding cost him $1.59M."], "n",
-                                                general="At 14x, a 7% move ends it. We'd size down."))
-        self.assertTrue(ok["ok"])
-        text, kb = render(self.store.post("1"), self.store.latest_drafts("1"))
-        self.assertIn("🌐 G", text)
-        self.assertEqual([b["text"] for b in kb["inline_keyboard"][0]], ["↩ A", "↩ G"])
 
-    def test_missing_general_reply_is_a_warning(self):
+    def test_insight_is_validated(self):
+        bad = self.save(["Funding cost him $1.59M."], insight="Here's the thing: ETFs sold.")
+        self.assertIn("N: staged line", " ".join(bad["errors"]))
+
+    def test_missing_general_and_question_are_warnings(self):
         r = self.save(["Funding cost him $1.59M."])
-        self.assertIn("no general reply (G)", " ".join(r["warnings"]))
+        joined = " ".join(r["warnings"])
+        self.assertIn("no general reply (G)", joined)
+        self.assertIn("no draft asks the author anything", joined)
+        asked = self.save(["Funding cost him $1.59M. Is that in your plan?"])
+        self.assertNotIn("asks the author", " ".join(asked["warnings"]))
 
     def test_rejects_humanizer_tells(self):
-        r = self.save(["We'd expect grind, not fireworks.",
-                       "It's not just leverage. Let that sink in.",
-                       "Great question! This is a pivotal moment."])
+        r = self.save(["We'd expect grind, not fireworks.", "It's not just leverage. Let that sink in."],
+                      general="Great question! This is a pivotal moment.")
         self.assertFalse(r["ok"])
         joined = " ".join(r["errors"])
         self.assertIn('A: \'not X but Y\' contrast (humanizer §1): ", not fireworks."', r["errors"])
         self.assertIn("B: staged line", joined)
-        self.assertIn("C: stock AI word", joined)
-        self.assertIn("C: chatbot residue", joined)
+        self.assertIn("G: stock AI word", joined)
+        self.assertIn("G: chatbot residue", joined)
         self.assertEqual(self.store.post("1")["status"], "pending")
 
     def test_rejects_playbook_forms(self):
         r = self.save(["$SOXL went the other way, 10 bearish vs 3 bullish.",
-                       "Biggest move: 10 wallets bullish on $NVDA.",
-                       "Profit-taking on one chip ticker, dip-buying on another. We'll see if they hold."])
+                       "Biggest move: 10 wallets bullish on $NVDA."],
+                      general="Profit-taking on one chip ticker, dip-buying on another. We'll see if they hold.")
         self.assertFalse(r["ok"])
         joined = " ".join(r["errors"])
         self.assertIn("A: dramatized turn", joined)
         self.assertIn("B: label then reveal", joined)
-        self.assertIn("C: mirrored pair", joined)
-        self.assertIn("C: closing forecast", joined)
+        self.assertIn("G: mirrored pair", joined)
+        self.assertIn("G: closing forecast", joined)
+
+    def test_rejects_we_would_closers(self):
+        for closer in ["We'd watch whether those shorts start covering.",
+                       "So we size for the drawdown first, then think about targets.",
+                       "We'd rather be a bit late with a clean invalidation than early.",
+                       "We do the same."]:
+            r = self.save([f"Whales added $4.8M of $BTC shorts in 24h.\n{closer}"])
+            self.assertIn("ending (playbook, endings)", " ".join(r.get("errors", [])), closer)
+
+    def test_we_closer_only_counts_at_the_end(self):
+        r = self.save(["We'd size down before FOMC. Whales already cut $2.9M of $BTC longs."])
+        self.assertTrue(r["ok"], r.get("errors"))
+
+    def test_rejects_the_bot_opener_and_figure_stacks(self):
+        r = self.save(["The Hyperliquid whales we track are net short $1.63M on $SOL.",
+                       "$RKLB down 14.1%: +$649K. $META down 2.5%: +$728K. $GOOGL down 2.7%: +$569K."])
+        joined = " ".join(r["errors"])
+        self.assertIn('A: opens with "The Hyperliquid whales we track"', joined)
+        self.assertIn("B: 6 figures", joined)
+        ok = self.save(["HL whales we track are net short $SOL by $1.63M, funding still positive at 8.6% APR."])
+        self.assertTrue(ok["ok"], ok.get("errors"))
 
     def test_plain_facts_without_forms_pass(self):
         r = self.save(["10 wallets cut $SOXL longs after a +23% day, 8 of them in profit, $241k realized.",
-                       "$NVDA: 10 wallets bullish vs 2, $934k in, 8 fresh longs.",
-                       "We'll check those 8 $NVDA longs again tomorrow."])
+                       "$NVDA: 10 wallets bullish vs 2, $934k in, 8 fresh longs."],
+                      general="We'll check those 8 $NVDA longs again tomorrow.")
         self.assertTrue(r["ok"], r.get("errors"))
 
     def test_plain_contrast_with_information_passes(self):
         r = self.save(["Low open interest means less forced selling on the next dip, but also less fuel "
                        "for a squeeze up.",
-                       "We'd cut size before the events rather than widen stops after.",
                        "Not for everyone. Whales stayed net short and are up $1.26M."])
         self.assertTrue(r["ok"], r.get("errors"))
 
@@ -403,7 +443,7 @@ class ToolsTest(unittest.TestCase):
         warn = "more drafts in 'I' than in 'we'"
         mostly_i = self.save(["I'd stay out of this one.", "My read: funding decides it."])
         self.assertIn(warn, " ".join(mostly_i["warnings"]))
-        mostly_we = self.save(["We'd stay out of this one.", "Our data says funding decides it."])
+        mostly_we = self.save(["Our data says funding decides it.", "We're out of this one."])
         self.assertNotIn(warn, " ".join(mostly_we["warnings"]))
 
     def test_pending_carries_owner_instructions(self):
@@ -420,17 +460,63 @@ class ToolsTest(unittest.TestCase):
         self.assertEqual(example["owner_ideal"], "Our whales are adding into Friday. We'd stay long.")
         self.assertEqual(len(self.tools.feedback_summary()["ideal_rewrites"]), 1)
 
-    def test_edited_posted_replies_reach_the_drafting_session(self):
+    def test_owner_replies_reach_the_drafting_session_with_their_reach(self):
         self.store.insert_post(make_post("3"))
         self.store.save_drafts("3", ["Hyperliquid whales stayed net short and are up $1.26M on it."])
-        for rid, matched, text in [("r1", "A~", "@AshCrypto Wallets we're tracking remain net short and are up $1.26M."),
-                                   ("r2", "A", "@AshCrypto Hyperliquid whales stayed net short and are up $1.26M on it.")]:
-            self.store.insert_reply({"id": rid, "post_id": "3", "text": text, "created_at": iso(1), "matched": matched})
+        self.store.insert_post(make_post("4", source="mention", text="@DexiScan Longs closing everywhere lol"))
+        for rid, pid, matched, text in [
+                ("r1", "3", "A~", "@AshCrypto Wallets we're tracking remain net short and are up $1.26M."),
+                ("r2", "3", "A", "@AshCrypto Hyperliquid whales stayed net short and are up $1.26M on it."),
+                ("r3", "4", "own", "@soonmource Could be smart risk before a period of uncertainty :)")]:
+            self.store.insert_reply({"id": rid, "post_id": pid, "text": text, "created_at": iso(1), "matched": matched})
+        self.store.set_outcome("r1", {"impression_count": 35, "like_count": 0, "reply_count": 0}, False)
         examples = self.tools.pending()["owner_examples"]
-        self.assertEqual([e.get("owner_posted") for e in examples],
-                         ["Wallets we're tracking remain net short and are up $1.26M."],
-                         "a draft posted unchanged is not the owner's writing")
-        self.assertEqual(examples[0]["our_drafts"], {"A": "Hyperliquid whales stayed net short and are up $1.26M on it."})
+        posted = {e["owner_posted"]: e for e in examples if "owner_posted" in e}
+        self.assertEqual(set(posted), {"Wallets we're tracking remain net short and are up $1.26M.",
+                                       "Could be smart risk before a period of uncertainty :)"},
+                         "a draft posted unchanged is not the owner's writing; an own reply without drafts is")
+        edited = posted["Wallets we're tracking remain net short and are up $1.26M."]
+        self.assertEqual(edited["our_drafts"], {"A": "Hyperliquid whales stayed net short and are up $1.26M on it."})
+        self.assertEqual(edited["reach_24h"]["impressions"], 35)
+        self.assertEqual(posted["Could be smart risk before a period of uncertainty :)"]["our_drafts"], {})
+
+    def test_top_replies_rank_by_reach_and_skip_banned_forms(self):
+        for pid, rid, text, metrics, answered in [
+                ("5", "t1", "@a Do you see the band at 77K as fresh longs?", {"impression_count": 506, "like_count": 1}, 0),
+                ("6", "t2", "@a Whales bought it. We'd want the selling to stop first.", {"impression_count": 900}, 0),
+                ("7", "t3", "@a Sell the news 🙈", {"impression_count": 64, "like_count": 2}, 1)]:
+            self.store.insert_post(make_post(pid))
+            self.store.insert_reply({"id": rid, "post_id": pid, "text": text, "created_at": iso(1), "matched": "own"})
+            self.store.set_outcome(rid, metrics, bool(answered))
+        top = self.tools.top_replies()
+        self.assertEqual([t["reply"] for t in top], ["Do you see the band at 77K as fresh longs?", "Sell the news 🙈"])
+        self.assertTrue(top[1]["author_replied"])
+
+
+class VoiceTest(unittest.TestCase):
+    def test_the_voice_copy_matches_the_owners_skill(self):
+        from dexi_x_radar.voice import is_current, source_path
+        source = source_path()
+        if not source:
+            self.skipTest("the synced rudejohn-x-voice skill isn't on this machine")
+        copy = load_settings({"DB_PATH": ":memory:"}).voice_file
+        self.assertTrue(is_current(copy, source),
+                        "prompts/voice/SKILL.md is older than your rudejohn-x-voice skill: "
+                        "run `python -m dexi_x_radar sync-voice`, commit and deploy")
+
+    def test_sync_copies_the_source(self):
+        import os
+        from dexi_x_radar.voice import sync
+        with tempfile.TemporaryDirectory() as tmp:
+            src, copy = Path(tmp) / "SKILL.md", Path(tmp) / "out" / "SKILL.md"
+            src.write_text("voice v2", encoding="utf-8")
+            os.environ["VOICE_SKILL_SOURCE"] = str(src)
+            try:
+                self.assertIn("copied", sync(copy))
+                self.assertEqual(copy.read_text(encoding="utf-8"), "voice v2")
+                self.assertIn("up to date", sync(copy))
+            finally:
+                del os.environ["VOICE_SKILL_SOURCE"]
 
 
 class LoggingTest(unittest.TestCase):
@@ -533,8 +619,9 @@ class FakeAnthropic:
     async def create(self, **kwargs):
         self.calls.append(kwargs)
         answer = self.answers.pop(0)
+        searches = types.SimpleNamespace(web_search_requests=2) if kwargs.get("tools") else None
         usage = types.SimpleNamespace(input_tokens=1000, output_tokens=500, cache_creation_input_tokens=0,
-                                      cache_read_input_tokens=0)
+                                      cache_read_input_tokens=0, server_tool_use=searches)
         content = [types.SimpleNamespace(type="thinking", thinking=""),
                    types.SimpleNamespace(type="text", text=json.dumps(answer))]
         return types.SimpleNamespace(content=content, stop_reason="end_turn", usage=usage, model=kwargs["model"])
@@ -552,10 +639,13 @@ class FakeDexi:
         return {"address": address, "stats": {"win_rate": 0.125, "n": 8}}
 
 
-REPLY = {"reply": True, "market": "crypto", "reason": "whale claim"}
-DRAFTED = {"drafts": ["Hyperliquid whales flipped net long $BTC: $13.9M vs $13.4M short."],
-           "general": "A flip this small decides little; we'd watch whether it holds.",
+REPLY = {"reply": True, "market": "crypto", "research": False, "reason": "whale claim"}
+DRAFTED = {"drafts": ["HL whales flipped net long $BTC: $13.9M vs $13.4M short.", "Dip buyers have company :)"],
+           "insight": "", "insight_source": "",
+           "general": "A flip this small can come from one wallet. How many wallets added matters as much as size.",
            "note": "Whale flip · xbrief BTC book", "skip_reason": ""}
+FINDINGS = {"findings": [{"fact": "Strive bought $511M of BTC on Nov 3", "source": "https://example.com/strive",
+                          "published": "2026-11-03", "why": "a spot buyer on the same dip"}]}
 
 
 class DrafterTest(unittest.TestCase):
@@ -576,7 +666,7 @@ class DrafterTest(unittest.TestCase):
         drafter = self.drafter(REPLY, DRAFTED)
         done = asyncio.run(drafter.run_once())
         self.assertEqual(done, {"1": "drafted"})
-        self.assertEqual([d["label"] for d in self.store.latest_drafts("1")], ["A", "G"])
+        self.assertEqual([d["label"] for d in self.store.latest_drafts("1")], ["A", "B", "G"])
         triage, draft = self.client.calls
         self.assertEqual(triage["model"], "claude-haiku-5-5")
         self.assertNotIn("fallbacks", triage, "Haiku has no server-side fallback")
@@ -585,11 +675,39 @@ class DrafterTest(unittest.TestCase):
         system = draft["system"][0]["text"]
         self.assertIn("# Reply playbook", system)
         self.assertIn("# Humanizer", system)
+        self.assertIn("<voice_skill>\n---\nname: \"rudejohn-x-voice\"", system)
         user = " ".join(b.get("text", "") for b in draft["messages"][0]["content"])
         self.assertIn("13.9", user, "the x-brief goes with the post")
         self.assertIn("0xabc", user, "Whale Radar for the wallet in the post")
         # 2 calls x (1000 in, 500 out): Haiku $0.00035 + Opus $0.014
         self.assertAlmostEqual(drafter.spent_today(), 0.01435, places=6)
+
+    def test_research_feeds_the_insight_and_its_source_reaches_the_note(self):
+        with_n = {**DRAFTED, "insight": "Strive bought $511M of $BTC on Nov 3, a spot bid under this dip.",
+                  "insight_source": "https://example.com/strive"}
+        drafter = self.drafter({**REPLY, "research": True}, FINDINGS, with_n)
+        self.assertEqual(asyncio.run(drafter.run_once()), {"1": "drafted"})
+        triage, research, draft = self.client.calls
+        self.assertEqual(research["model"], "claude-sonnet-5-5")
+        self.assertEqual(research["tools"], [{"type": "web_search_20260209", "name": "web_search", "max_uses": 2}])
+        self.assertEqual(research["output_config"], {"effort": "low"})
+        self.assertIn("example.com/strive", draft["messages"][0]["content"][-1]["text"], "findings go to the drafter")
+        self.assertEqual([d["label"] for d in self.store.latest_drafts("1")], ["A", "B", "N", "G"])
+        self.assertTrue(self.store.post("1")["note"].endswith("· N: https://example.com/strive"))
+        # Haiku $0.00035 + Sonnet $0.007 + 2 searches $0.02 + Opus $0.014
+        self.assertAlmostEqual(drafter.spent_today(), 0.04135, places=6)
+
+    def test_failed_research_still_drafts(self):
+        drafter = self.drafter({**REPLY, "research": True}, "no json here", DRAFTED)
+        self.assertEqual(asyncio.run(drafter.run_once()), {"1": "drafted"})
+        self.assertNotIn("N", [d["label"] for d in self.store.latest_drafts("1")])
+
+    def test_research_off(self):
+        self.settings = load_settings({"DB_PATH": ":memory:", "QUIET_HOURS": "off", "NOTE_MODEL": "off"})
+        self.tools = RadarTools(self.settings, self.store, None, dexi=self.dexi)
+        drafter = self.drafter({**REPLY, "research": True}, DRAFTED)
+        self.assertEqual(asyncio.run(drafter.run_once()), {"1": "drafted"})
+        self.assertEqual(len(self.client.calls), 2)
 
     def test_triage_skip_never_drafts(self):
         done = asyncio.run(self.drafter({"reply": False, "market": "crypto", "reason": "meme"}).run_once())
@@ -598,12 +716,14 @@ class DrafterTest(unittest.TestCase):
         self.assertEqual(len(self.client.calls), 1)
 
     def test_rejected_drafts_get_rewritten(self):
-        bad = {**DRAFTED, "general": "Rates matter, not the chart."}
+        bad = {**DRAFTED, "general": "Rates matter, not the chart.",
+               "drafts": ["Whales added $4.8M of $BTC shorts.\nWe'd watch whether they cover."]}
         done = asyncio.run(self.drafter(REPLY, bad, DRAFTED).run_once())
         self.assertEqual(done, {"1": "drafted"})
         retry = self.client.calls[2]["messages"]
         self.assertEqual([m["role"] for m in retry], ["user", "assistant", "user"])
         self.assertIn("not X but Y", retry[2]["content"])
+        self.assertIn("we'd watch / we size", retry[2]["content"])
 
     def test_owner_redraft_is_not_triaged_away(self):
         self.store.add_feedback("1", "regen")

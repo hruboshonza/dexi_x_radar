@@ -17,7 +17,8 @@ from .store import Store, now_iso, parse_iso
 from .telegram import Notifier
 
 MAX_DRAFT = 280
-OWNER_EXAMPLES = 10
+OWNER_EXAMPLES = 12
+TOP_REPLIES = 6
 _DASHES = ("—", "–")
 # "77 Hyperliquid whales we track", "214 wallets we track": the owner never states the cohort size.
 _COHORT_SIZE = re.compile(r"\b\d{2,4}\s+(?:tracked\s+)?(?:hyperliquid\s+)?(?:whales|wallets)\s+(?:that\s+)?we\s+track",
@@ -49,21 +50,83 @@ _HUMANIZER_TELLS = (
         r"\bwe'll see (?:if|whether|who|how)\b|\bturns? into exit liquidity\b|\bthe next fuel\b",
         re.IGNORECASE)),
 )
+# Owner 2026-11-16: endings the owner deleted in almost every posted draft ("We'd watch...", "We size for...").
+# Checked on the last sentence only; "We'll check those longs tomorrow" stays allowed.
+_CLOSER_VERBS = (r"watch|want|wait|size|stay|keep|check|trust|rather|cap|bank|cut|treat|expect|let|judge|weigh"
+                 r"|follow|book|call|match|take|respect|look|need|stick")
+_WE_CLOSER = re.compile(
+    rf"\bwe(?:'d| would)\s+(?:\w+\s+){{0,2}}?(?:{_CLOSER_VERBS})\b"
+    rf"|^(?:so |and |then )?we (?:{_CLOSER_VERBS}|do the same)\b", re.IGNORECASE)
+_SENTENCES = re.compile(r"[^.!?\n]+[.!?]*")
+# Owner 2026-11-16: every draft opened with this; it reads as a bot.
+_BOT_OPENER = re.compile(r"^\s*(?:the\s+)?hyperliquid\s+whales\s+we\s+track\b", re.IGNORECASE)
+# Figures a reader has to hold in mind; time windows (24h, 7d, 15 min) don't count.
+_FIGURE = re.compile(r"(?<![\w.$])\$?\d[\d,]*(?:\.\d+)?(?:bn|[kmb%x])?(?!\.\d)(?![\w%])", re.IGNORECASE)
+_TIME_WINDOW = re.compile(r"\b\d+\s?(?:h|d|w|min|mins|hours?|days?|weeks?)\b", re.IGNORECASE)
+MAX_FIGURES = 4
 # The owner writes as "we" (DexiScan); "I" is the occasional exception.
 _SINGULAR = re.compile(r"\b(?:I|I'm|I'd|I've|I'll|my|me)\b")
 _PLURAL = re.compile(r"\b(?:we|we're|we'd|we've|we'll|our|us)\b", re.IGNORECASE)
 
 INSTRUCTIONS = """Reply radar for the @DexiScan X account. Posts arrive in a queue; you write reply
 drafts, the owner posts them by hand. Workflow: radar_pending -> for each post either radar_skip
-(our data adds nothing) or fetch data (dexiscan_xbrief, dexiscan_whale_radar for full wallet
-addresses) and radar_save_drafts (1-3 drafts built on DexiScan data, plus one general reply G
-without data: constructive criticism or a macro point the post leaves out). The humanizer skill
-decides how drafts are written: write them, run its process, save only the final text.
-`owner_examples` in radar_pending are the owner's own writing next to our drafts (owner_ideal: a 💡
-rewrite; owner_posted: what the owner actually posted after changing them): humanizer's writing sample.
-radar_playbook says what a reply must carry: a number the thread doesn't have, readable in one
-pass. Use only numbers from the post or from the DexiScan tools. Write as "we" (DexiScan). Never
-state the total number of tracked wallets."""
+(nothing worth saying) or fetch data (dexiscan_xbrief, dexiscan_whale_radar for full wallet
+addresses) and radar_save_drafts: A (the data reply), B (a short human reaction), optionally N
+(insight: one fact from a web search or a mechanism that changes how the post reads, its source in
+`note`) and G (critique or a macro point, no data). radar_playbook says what each one carries.
+The owner's voice skill (rudejohn-x-voice) decides how drafts sound; the humanizer skill is the
+final check for AI tells. `owner_examples` in radar_pending are the owner's own writing (owner_ideal:
+a 💡 rewrite; owner_posted: what the owner actually posted, with its reach) and `top_replies` are
+the replies that got the most reach: match them. Use only numbers from the post, the DexiScan tools
+or a source you cite. Write as "we" (DexiScan). Never state the total number of tracked wallets."""
+
+
+def check_drafts(texts: list[str], general: str = "", insight: str = "") -> tuple[list[str], list[str]]:
+    """The hard limits (errors: the draft never reaches the phone) and the soft ones (warnings).
+    `texts` are A and B; `insight` is N and `general` is G."""
+    errors, warnings = [], []
+    labelled = list(zip("AB", texts)) + ([("N", insight)] if insight else []) + ([("G", general)] if general else [])
+    for label, text in labelled:
+        if any(ch in text for ch in _DASHES):
+            errors.append(f"{label}: contains an em or en dash")
+        if len(text) > MAX_DRAFT:
+            errors.append(f"{label}: {len(text)} chars, max {MAX_DRAFT}")
+        if _COHORT_SIZE.search(text):
+            errors.append(f"{label}: states the total number of tracked wallets")
+        plain = text.replace("\u2019", "'")
+        for name, pattern in _HUMANIZER_TELLS:
+            if m := pattern.search(plain):
+                errors.append(f'{label}: {name}: "{m.group(0).strip()}"')
+        sentences = [x.strip() for x in _SENTENCES.findall(plain) if x.strip()]
+        if sentences and (m := _WE_CLOSER.search(sentences[-1])):
+            errors.append(f'{label}: "we\'d watch / we size" ending (playbook, endings): "{m.group(0).strip()}". '
+                          "End on the last fact, our own view, or a question to the author")
+        if m := _BOT_OPENER.search(plain):
+            errors.append(f'{label}: opens with "{m.group(0).strip()}"; start with the finding, or say it '
+                          'another way ("HL whales", "the wallets we track", "our whales")')
+        figures = len(_FIGURE.findall(_TIME_WINDOW.sub(" ", plain)))
+        if figures > MAX_FIGURES:
+            errors.append(f"{label}: {figures} figures, keep {MAX_FIGURES} or fewer (2 or 3 read best)")
+    if texts and general == "":
+        warnings.append("no general reply (G): fine when the post makes no claim to argue with or add to")
+    if not any("?" in t for _, t in labelled):
+        warnings.append("no draft asks the author anything: one real question to the author, when it fits, "
+                        "makes an answer more likely")
+    all_texts = [t for _, t in labelled]
+    singular = sum(1 for t in all_texts if _SINGULAR.search(t))
+    plural = sum(1 for t in all_texts if _PLURAL.search(t))
+    if singular > plural:
+        warnings.append("more drafts in 'I' than in 'we': the owner prefers 'we' (DexiScan)")
+    return errors, warnings
+
+
+def _reach(reply: dict) -> dict:
+    m = reply.get("metrics") or {}
+    if not m:
+        return {}
+    return {"reach_24h": {"impressions": m.get("impression_count", 0), "likes": m.get("like_count", 0),
+                          "replies": m.get("reply_count", 0)},
+            "author_replied": bool(reply.get("author_replied"))}
 
 
 class RadarTools:
@@ -95,25 +158,47 @@ class RadarTools:
         return out
 
     def posted_rewrites(self, limit: int | None = None) -> list[dict]:
-        """Replies the owner posted after changing our drafts (edited, merged or own), newest first."""
+        """Replies in the owner's own words: posted after changing our drafts (edited, merged), or
+        written from scratch, also on a post we never drafted (a mention, small talk). Newest first,
+        each with the reach it got."""
         out = []
         for r in self.store.replies():
             matched = r["matched"]
             if not (matched.endswith("~") or matched.startswith("merged") or matched == "own"):
                 continue
-            drafts = self.store.latest_drafts(r["post_id"])
-            if not drafts:
+            post = self.store.post(r["post_id"])
+            if not post:
                 continue
-            post = self.store.post(r["post_id"]) or {}
+            drafts = self.store.latest_drafts(r["post_id"])
             out.append({"post_id": r["post_id"], "author": post.get("author"), "post": (post.get("text") or "")[:500],
                         "our_drafts": {d["label"]: d["text"] for d in drafts},
-                        "owner_posted": strip_mentions(r["text"]), "matched": matched, "at": r["created_at"]})
+                        "owner_posted": strip_mentions(r["text"]), "matched": matched, **_reach(r),
+                        "at": r["created_at"]})
         return out[:limit]
 
     def owner_examples(self, limit: int = OWNER_EXAMPLES) -> list[dict]:
-        """Humanizer's writing sample: the owner's 💡 rewrites and edited posted replies, newest first."""
+        """The writing sample: the owner's 💡 rewrites and own posted replies, newest first."""
         examples = self.ideal_rewrites(limit=limit) + self.posted_rewrites(limit=limit)
         return sorted(examples, key=lambda e: e["at"], reverse=True)[:limit]
+
+    def top_replies(self, limit: int = TOP_REPLIES) -> list[dict]:
+        """The posted replies that got the most reach after 24 h. Only ones that still pass today's
+        checks, so an ending we no longer write is never held up as a model."""
+        scored = []
+        for r in self.store.replies(limit=None):
+            if r["matched"] == "unqueued" or not r["metrics"]:
+                continue
+            text = strip_mentions(r["text"])
+            if check_drafts([text])[0]:
+                continue
+            m = r["metrics"]
+            score = (m.get("impression_count", 0) + 10 * m.get("like_count", 0) + 30 * m.get("reply_count", 0)
+                     + 50 * (r["author_replied"] or 0))
+            post = self.store.post(r["post_id"]) or {}
+            scored.append((score, {"author": post.get("author"), "post": (post.get("text") or "")[:300],
+                                   "reply": text, "draft_used": r["matched"], **_reach(r)}))
+        scored.sort(key=lambda x: -x[0])
+        return [e for _, e in scored[:limit]]
 
     def pending(self, limit: int = 5) -> dict:
         posts = self.store.posts(status="pending", limit=limit)
@@ -126,38 +211,22 @@ class RadarTools:
             view["previous_drafts"] = self.store.all_drafts(p["id"])
             out.append(view)
         return {"pending": out, "count": len(out),
-                "owner_examples": self.owner_examples() if out else []}
+                "owner_examples": self.owner_examples() if out else [],
+                "top_replies": self.top_replies() if out else []}
 
-    async def save_drafts(self, post_id: str, drafts: list[str], note: str = "", general: str = "") -> dict:
+    async def save_drafts(self, post_id: str, drafts: list[str], note: str = "", general: str = "",
+                          insight: str = "") -> dict:
         post = self.store.post(post_id)
         if not post:
             return {"ok": False, "error": f"unknown post {post_id}"}
         texts = [d.strip() for d in drafts if d and d.strip()]
-        general = (general or "").strip()
-        if not 1 <= len(texts) <= 3:
-            return {"ok": False, "error": "send 1 to 3 drafts, the full reply first"}
-        errors, warnings = [], []
-        for label, text in list(zip("ABC", texts)) + ([("G", general)] if general else []):
-            if any(ch in text for ch in _DASHES):
-                errors.append(f"{label}: contains an em or en dash")
-            if len(text) > MAX_DRAFT:
-                errors.append(f"{label}: {len(text)} chars, max {MAX_DRAFT}")
-            if _COHORT_SIZE.search(text):
-                errors.append(f"{label}: states the total number of tracked wallets")
-            plain = text.replace("’", "'")
-            for name, pattern in _HUMANIZER_TELLS:
-                if m := pattern.search(plain):
-                    errors.append(f'{label}: {name}: "{m.group(0).strip()}"')
-        if not general:
-            warnings.append("no general reply (G): add one unless the post gives nothing to argue with or add to")
-        all_texts = texts + ([general] if general else [])
-        singular = sum(1 for t in all_texts if _SINGULAR.search(t))
-        plural = sum(1 for t in all_texts if _PLURAL.search(t))
-        if singular > plural:
-            warnings.append("more drafts in 'I' than in 'we': the owner prefers 'we' (DexiScan)")
+        general, insight = (general or "").strip(), (insight or "").strip()
+        if not 1 <= len(texts) <= 2:
+            return {"ok": False, "error": "send 1 or 2 drafts: A (the data reply), then B (the short human one)"}
+        errors, warnings = check_drafts(texts, general, insight)
         if errors:
             return {"ok": False, "errors": errors}
-        rnd = self.store.save_drafts(post_id, texts, general or None)
+        rnd = self.store.save_drafts(post_id, texts, general or None, insight or None)
         self.store.set_status(post_id, "drafted", note=note or None, skip_by=None, skip_reason=None)
         if self.notifier:
             await self.notifier.show(post_id, ping=True)
@@ -239,17 +308,22 @@ def build_mcp(tools: RadarTools, path: str = "/mcp") -> FastMCP:
         return tools.pending(limit)
 
     @mcp.tool()
-    async def radar_save_drafts(post_id: str, drafts: list[str], general: str = "", note: str = "") -> dict:
+    async def radar_save_drafts(post_id: str, drafts: list[str], general: str = "", note: str = "",
+                                insight: str = "") -> dict:
         """Save the drafts and push them to the owner's phone as one message under the post.
-        `drafts`: 1-3 replies (A, B, C), the full reply first, each built on DexiScan data.
-        `general`: one general reply (G) with no DexiScan data: constructive criticism of the
-        post's claim, or a macro or economic point it leaves out.
-        Every text goes through the humanizer skill first (final text only).
+        `drafts`: [A] or [A, B]. A: the data reply, 1 to 3 DexiScan numbers tied to the post, in
+        plain words. B: a short human reaction (1-2 lines, a view, a joke or a wider angle, at most
+        one number).
+        `insight` (N, optional): one fact from a web search or a mechanism that changes how the post
+        reads; only when it passes the playbook's test. Put its source URL in `note`.
+        `general` (G, optional): no DexiScan data; criticism of the post's claim or a macro point it
+        leaves out. Leave it out when the post claims nothing.
+        Every text goes through the voice skill and the humanizer check first (final text only).
         `note`: the angle and the data used, e.g. "Whale flip vs ETF week · xbrief BTC book".
         Rejected: em/en dashes, over 280 chars, stating the total number of tracked wallets,
-        the strongest humanizer tells (not X but Y, staged lines, stock AI words, chatbot residue) and
-        the playbook's banned forms (dramatized turns, label then reveal, mirrored pairs, closing forecasts)."""
-        return await tools.save_drafts(post_id, drafts, note, general)
+        the strongest humanizer tells, the playbook's banned forms, a "we'd watch / we size" ending,
+        the "Hyperliquid whales we track" opener, more than 4 figures in one draft."""
+        return await tools.save_drafts(post_id, drafts, note, general, insight)
 
     @mcp.tool()
     async def radar_skip(post_id: str, reason: str) -> dict:

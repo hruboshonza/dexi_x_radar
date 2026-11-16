@@ -31,10 +31,12 @@ X API ──────►│ poller (every 5 min)  → SQLite: cursor, queue, 
    replies. It uses `since_id`, so each post is read (and paid for) once.
 2. **Queue.** New posts go into the queue. Nothing is sent to your phone yet.
 3. **Draft.** Claude takes pending posts (inside the service through the API, or over MCP),
-   adds data (for DexiScan: x-brief and Whale Radar), writes drafts per `PLAYBOOK.md` and
-   saves them. Only then
-   does the bot send one message, which pings: the author's post, with the drafts right
-   under it. A post Claude skips (meme, off-topic) never reaches your phone.
+   adds data (for DexiScan: x-brief and Whale Radar) and, for the insight reply, a web search,
+   writes drafts per `PLAYBOOK.md` in your voice and saves them. Only then does the bot send
+   one message, which pings: the author's post, with the drafts right under it (**A** data,
+   **B** short human reaction, **🔎 N** insight with its source, **🌐 G** critique or macro).
+   A post older than `LATE_AFTER_MINUTES` (60) arrives without a sound, marked ⏰ pozdě. A post
+   Claude skips (meme, off-topic) never reaches your phone.
 4. **You post.** **↩** opens X with the reply prefilled. **Copy** copies it.
    **Edit** takes your instruction and redrafts. **Skip** asks for a reason.
 5. **Learn.** The radar sees what you actually posted and how it did (see *Feedback*).
@@ -78,16 +80,23 @@ playbook review happens.
 
 Set `ANTHROPIC_API_KEY` and the service drafts by itself, with no PC and no loop. About a
 minute after a post is queued (`DRAFT_CHECK_SECONDS`), `TRIAGE_MODEL` (Haiku) decides whether
-it is worth a reply. A post that is gets one call to `DRAFT_MODEL` (Opus 5.5 by default) with
-`PLAYBOOK.md`, the humanizer skill (`prompts/humanizer/`), the x-brief, Whale Radar for any
-wallet in the post, its images and your latest rewrites. The drafts go through the same
+it is worth a reply and whether a web search could add a fact. If so, `NOTE_MODEL` (Sonnet 5.5,
+low effort, at most `NOTE_SEARCHES` searches) looks for one or two facts with sources for the
+insight reply N. Then one call to `DRAFT_MODEL` (Opus 5.5 by default) with `PLAYBOOK.md`, your
+voice skill (`prompts/voice/`), the humanizer skill (`prompts/humanizer/`), the x-brief, Whale
+Radar for any wallet in the post, the research, its images, your latest own replies with their
+reach, and the replies that got the most reach. The drafts go through the same
 `radar_save_drafts` checks as in A and B; a rejected draft is rewritten up to twice. An edit or
 a redraft you ask for in Telegram is picked up the same way, within a minute.
 
 - Billed per token through the Anthropic API, separately from any subscription.
-- `DRAFT_DAILY_BUDGET_USD` (default 5) stops drafting for the day; the bot tells you once.
+- `DRAFT_DAILY_BUDGET_USD` (default 5) stops drafting for the day; the bot tells you once. It
+  counts tokens and web searches ($10 per 1,000) together.
 - Stop the local `/loop` while this runs, or both will draft the same posts.
 - `prompts/humanizer/` is a copy of the humanizer skill (MIT). Update it when the skill changes.
+- `prompts/voice/` is a copy of your `rudejohn-x-voice` skill. After you change the skill, run
+  `python -m dexi_x_radar sync-voice` on your PC, commit and deploy. The test suite fails on your
+  PC while the copy is out of date.
 
 ### Quiet hours
 
@@ -183,7 +192,12 @@ cp .env.example .env     # then fill it in
 | `DRAFT_EFFORT` | no (`high`) | effort of the drafting call |
 | `DRAFT_DAILY_BUDGET_USD` | no (5) | mode C stops for the day at this spend |
 | `DRAFT_CHECK_SECONDS` | no (60) | how often mode C looks for pending posts |
-| `HUMANIZER_FILE` | no (`prompts/humanizer/SKILL.md`) | the humanizer skill mode C writes with |
+| `HUMANIZER_FILE` | no (`prompts/humanizer/SKILL.md`) | the humanizer skill mode C checks with |
+| `VOICE_FILE` | no (`prompts/voice/SKILL.md`) | the voice skill mode C writes in |
+| `NOTE_MODEL` | no (`claude-sonnet-5-5`) | web research for the insight reply N; `off` disables it |
+| `NOTE_SEARCHES` | no (2) | web searches per post at most |
+| `LATE_AFTER_MINUTES` | no (60) | older posts reach the phone silently, marked late |
+| `VOICE_SKILL_SOURCE` | no | `sync-voice` only: the skill file, when it isn't under `~/.claude/skills/synced` |
 
 ### 4. Run it
 
@@ -195,6 +209,7 @@ python -m dexi_x_radar chat-id     # once, after /start to the bot (service stop
 python -m dexi_x_radar poll-once   # one poll cycle, prints what it did and cost
 python -m dexi_x_radar serve       # the service: poller + bot + MCP
 python -m dexi_x_radar status      # queue counts
+python -m dexi_x_radar sync-voice  # refresh prompts/voice/ from your rudejohn-x-voice skill
 ```
 
 Run **one instance at a time**. Telegram lets only one process read the bot's updates, and
@@ -267,6 +282,7 @@ that header (the server is stateless and does not need it). Fixes:
 |---|---|
 | `PLAYBOOK.md` | reply rules, grown from your feedback |
 | `prompts/humanizer/` | copy of the humanizer skill for drafts inside the service |
+| `prompts/voice/` | copy of the owner's voice skill (`sync-voice` refreshes it) |
 | `watchlist.txt` | accounts to watch |
 | `radar_poll.py` | phase-0 poller (one run, writes `inbox/`) |
 | `drafts/` | early rounds, kept as playbook evidence |
