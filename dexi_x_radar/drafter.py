@@ -208,10 +208,19 @@ class Drafter:
             return "skipped"
         market = verdict["market"]
         if market not in briefs:
-            briefs[market] = await self.tools.dexi.xbrief(market)
+            briefs[market] = await self.brief(market)
         wallets = await self.wallets(post)
         findings = await self.research(post) if verdict.get("research") else []
         return await self.draft(post, examples, briefs[market], wallets, findings)
+
+    async def brief(self, market: str) -> dict:
+        """The x-brief for a market. When DexiScan fails, the drafts go ahead without whale data:
+        a reaction, an insight or a macro take needs none."""
+        try:
+            return await self.tools.dexi.xbrief(market)
+        except Exception as exc:
+            log.warning("x-brief %s failed: %s", market, exc)
+            return {"unavailable": f"DexiScan x-brief failed ({str(exc)[:120]}); write no whale figures"}
 
     async def wallets(self, post: dict) -> list[dict]:
         out = []

@@ -702,6 +702,15 @@ class DrafterTest(unittest.TestCase):
         self.assertEqual(asyncio.run(drafter.run_once()), {"1": "drafted"})
         self.assertNotIn("N", [d["label"] for d in self.store.latest_drafts("1")])
 
+    def test_failed_brief_still_drafts_without_whale_data(self):
+        async def broken(market="crypto"):
+            raise RuntimeError("/api/x-brief/xyz: HTTP 500")
+        self.dexi.xbrief = broken
+        drafter = self.drafter({**REPLY, "market": "xyz"}, DRAFTED)
+        self.assertEqual(asyncio.run(drafter.run_once()), {"1": "drafted"})
+        user = self.client.calls[1]["messages"][0]["content"]
+        self.assertIn("write no whale figures", " ".join(b.get("text", "") for b in user))
+
     def test_research_off(self):
         self.settings = load_settings({"DB_PATH": ":memory:", "QUIET_HOURS": "off", "NOTE_MODEL": "off"})
         self.tools = RadarTools(self.settings, self.store, None, dexi=self.dexi)
