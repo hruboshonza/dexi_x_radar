@@ -55,6 +55,8 @@ The feel: a smart friend at the desk next to you, sharing what the data shows, w
 ## Core traits (keep all of them)
 
 1. **Data first.** Lead with the number, the flow or the wallet behavior: dollar sizes ($25m, $137m), timeframes (4h, 24h), long/short ratios, funding, OI. The take comes after the data, never instead of it.
+   - **Dollars and heads.** Give the dollars and how many wallets or positions sit on each side. They often disagree, and that gap is often the post: "In dollars, $BTC whales are almost 50:50. By wallets it's 37 long vs 5 short." When a % appears, say which metric it is ("That's the $ metric").
+   - **A trend word needs the numbers behind it.** "turning bear", "slowly turning", "flipping", "unchanged from yesterday" only when the post has the earlier number and the direction holds over the whole window (24h), not just an intraday dip. "Majority bullish" only with the count that shows it. Otherwise give the numbers as they are (2026-11-18).
 2. **Honest about uncertainty.** He states his bias clearly, then admits what he does not know: "not buying it yet", "not trying to jinx it". One hedge per post, not five. "We'll see" belongs in his trade logs, never as the last line of a data post.
 3. **Skeptical by default.** Distrusts pumps and thin rallies. "Feels like a fakeout" is his natural register; he would rather wait than chase.
 4. **Radical transparency.** Shares his own entries, exits, partial TPs, stops hit, results like +2.5R / -1R, and losing whale signals. Posts losses as plainly as wins.
@@ -136,6 +138,26 @@ After (his voice, approved by him):
 >
 > The tag doesn't kill the signal, it stays on the page either way.
 > And yes, we tag our own signals as noise :)
+
+A data explainer he approved (How to read the whales #8, 2026-11-18). Plain fact lines, dollars and wallet counts side by side, spot next to perps, then one plain line per DexiScan view:
+> In dollars, $BTC whales are almost 50:50. By wallets it's 37 long vs 5 short.
+> Those 5 shorts hold $22.6M, the 37 longs $25.6M.
+>
+> $HYPE looks the same, 44 wallets long and 13 short.
+> The whole book went from 23% long this morning to 6% by the afternoon, 10% now. That's the $ metric.
+> In the last 24h they closed 439 shorts and opened 287. On the long side 218 opened, 184 closed.
+>
+> In spot they sold $1.1M and bought $198K in 24h, $979K of the selling was $HYPE.
+> Over 7 days they sold $6.5M of $HYPE spot net and bought $3.5M of $BTC spot.
+> 80 wallets still hold $HYPE spot, $67.1M worth, average entry $37.50.
+>
+> What we show on DexiScan:
+> Bias: the whole perp book, long vs short, right now.
+> Activity: every perp opened and closed in the last 24h.
+> Accumulation: per coin, what they added minus what they cut. $ETH tops it today, 3 wallets added $2.2M of longs into a 1% dip.
+> Spot: what they hold and what they bought or sold.
+
+His first version of that post said "Whales slowly turning to bear now by $ volume" and "majority of whales is remaining bullish, almost without change from yesterday". Over 24h the bias had gone from 8% to 10% long, so the drop to 6% was only intraday. The whole book held more short positions than long (302 vs 282), and the API gives no wallet counts for yesterday. Both lines went (see "A trend word needs the numbers behind it").
 
 ## Hooks that fit his voice
 
@@ -296,6 +318,7 @@ AI: "Big news — DexiScan just leveled up. It's not just a whale tracker, it's 
 - Marketing voice: "revolutionary", "game-changing", "unlock", "don't miss out", "This isn't just another...".
 - Hype emoji (🚀🔥💎🌕🔔), emoji walls, hashtags.
 - Stacking hedges. One is enough.
+- A trend or majority claim ("turning bear", "majority bullish", "same as yesterday") without the numbers that show it.
 - Context-free fragments as standalone posts.
 - Translating Czech idioms literally. Use the table above or a natural English equivalent.
 
